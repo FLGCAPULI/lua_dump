@@ -122,7 +122,7 @@ local function unloadFunc()
     
     -- Press E on the prompt
     pressKey(Enum.KeyCode.E, 0.1)
-    task.wait(0.1)
+    task.wait(0.28) -- Added 180ms delay
     
     -- Set wp 2
     wp2 = hrp.CFrame
@@ -130,13 +130,15 @@ local function unloadFunc()
     -- Sequence: TP WP1 -> E -> TP WP2 -> E (Repeated)
     for i = 1, 4 do
         teleport(wp1)
+        task.wait(0.18) -- Extra 180ms delay to allow server to register TP before prompt appears
         pressKey(Enum.KeyCode.E, 0.1)
-        task.wait(0.1)
+        task.wait(0.28) -- Added 180ms delay
         
         teleport(wp2)
+        task.wait(0.18) -- Extra 180ms delay to allow server to register TP before prompt appears
         if i < 4 then -- Don't press E on WP2 the final time before driving, based on prompt
             pressKey(Enum.KeyCode.E, 0.1)
-            task.wait(0.1)
+            task.wait(0.28) -- Added 180ms delay
         end
     end
 
@@ -146,7 +148,7 @@ local function unloadFunc()
     task.wait(2) 
     releaseKey(Enum.KeyCode.W)
     
-    task.wait(0.1)
+    task.wait(0.28) -- Added 180ms delay
     pressKey(Enum.KeyCode.E, 0.1) -- Press E on drive prompt
 end
 
