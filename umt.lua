@@ -14,6 +14,9 @@ local loopActive = false
 local isPaused = false
 local forceUnloadTrigger = false
 
+-- CONFIGURATION
+local VEHICLE_CAPACITY = 120 -- Change this number if you upgrade your vehicle's storage later
+
 -- ==========================================
 -- 1. GUI Setup
 -- ==========================================
@@ -159,22 +162,70 @@ end
 
 local function checkVehicleFull()
     local success, result = pcall(function()
+        -- Helper to match common "Full" phrases AND fractional formats (e.g. 120/120)
+        local function isFullPhrase(text)
+            if not text or text == "" then return false end
+            local lowerText = string.lower(text)
+            
+            -- 1. Check for standard full words
+            if string.find(lowerText, "vehicle full") or string.find(lowerText, "storage full") or string.find(lowerText, "inventory full") or lowerText == "full" or lowerText == "max" then
+                return true
+            end
+            
+            -- 2. Explicitly check for 120/120 (avoids triggering on 100/100 health bars)
+            local capacityString = tostring(VEHICLE_CAPACITY) .. "/" .. tostring(VEHICLE_CAPACITY)
+            -- Use raw text rather than lowerText to match EXACT capacity strings
+            if string.find(text, capacityString) then
+                return true
+            end
+            
+            -- 3. Check for dynamic patterns like "120/120" or "Capacity: 120 / 120"
+            local currentStr, maxStr = string.match(lowerText, "(%d+)%s*/%s*(%d+)")
+            if currentStr and maxStr then
+                local current, max = tonumber(currentStr), tonumber(maxStr)
+                -- Must match your vehicle capacity to avoid false triggers like health
+                if current and max and max == VEHICLE_CAPACITY and current >= max then
+                    return true
+                end
+            end
+            
+            return false
+        end
+
         -- 1. Check Player's Screen GUI
         for _, v in pairs(player.PlayerGui:GetDescendants()) do
             if v:IsA("TextLabel") or v:IsA("TextBox") or v:IsA("TextButton") then
-                if v.Text and string.find(string.lower(v.Text), "vehicle full") then
+                local textToCheck = (v.ContentText and v.ContentText ~= "") and v.ContentText or v.Text
+                if v.Visible and isFullPhrase(textToCheck) then
                     return true
                 end
             end
         end
         
-        -- 2. Check for Popup Text (BillboardGui) directly on the vehicle
+        -- 2. Directly check the ExaDrill (or any vehicle) the player is currently sitting in
         if character and character:FindFirstChild("Humanoid") and character.Humanoid.SeatPart then
-            local vehicle = character.Humanoid.SeatPart.Parent
-            for _, v in pairs(vehicle:GetDescendants()) do
-                if v:IsA("TextLabel") and v.Text then
-                    if string.find(string.lower(v.Text), "vehicle full") then
-                        return true
+            -- Get the main vehicle model
+            local vehicle = character.Humanoid.SeatPart:FindFirstAncestorWhichIsA("Model")
+            
+            if vehicle then
+                -- Check all text labels attached to the vehicle
+                for _, v in pairs(vehicle:GetDescendants()) do
+                    if v:IsA("TextLabel") or v:IsA("TextBox") or v:IsA("TextButton") then
+                        -- Check if the UI is actually enabled/visible before reading
+                        local gui = v:FindFirstAncestorOfClass("BillboardGui") or v:FindFirstAncestorOfClass("SurfaceGui")
+                        if (gui and gui.Enabled) or v.Visible then
+                            local textToCheck = (v.ContentText and v.ContentText ~= "") and v.ContentText or v.Text
+                            if isFullPhrase(textToCheck) then
+                                return true
+                            end
+                        end
+                    end
+                    
+                    -- Check for hidden Data Values (like a BoolValue named "IsFull" set to true)
+                    if v:IsA("BoolValue") and (string.find(string.lower(v.Name), "full") or string.find(string.lower(v.Name), "max")) then
+                        if v.Value == true then
+                            return true
+                        end
                     end
                 end
             end
@@ -182,6 +233,11 @@ local function checkVehicleFull()
         
         return false
     end)
+    
+    if not success then 
+        warn("Error checking full status: ", result) 
+    end
+    
     return success and result
 end
 
