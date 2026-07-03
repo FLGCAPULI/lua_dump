@@ -160,56 +160,71 @@ local function safeWait(waitTime)
     end
 end
 
-local function checkVehicleFull()
-    local success, result = pcall(function()
-        if not hrp then return false end
-        
-        local foundFull = false
-        local latestCargo = nil
-        
-        -- Scan the workspace for 3D Text popups (BillboardGuis)
-        for _, v in pairs(workspace:GetDescendants()) do
-            if v:IsA("TextLabel") then
-                local text = v.ContentText ~= "" and v.ContentText or v.Text
-                if text and text ~= "" then
-                    -- Verify it's a physical GUI in the 3D world
-                    local gui = v:FindFirstAncestorOfClass("BillboardGui") or v:FindFirstAncestorOfClass("SurfaceGui")
-                    if gui then
-                        -- Check distance (60 studs) to ensure it's OUR vehicle's popups, not another player's
-                        local adornee = gui.Adornee or (gui.Parent and gui.Parent:IsA("BasePart") and gui.Parent)
-                        if adornee and (adornee.Position - hrp.Position).Magnitude < 60 then
-                            local lowerText = string.lower(text)
-                            
-                            -- 1. Check for the red "VEHICLE FULL" popup
-                            if string.find(lowerText, "vehicle full") then
-                                foundFull = true
-                            end
-                            
-                            -- 2. Try to parse live numbers from popups like "+1 Cobalt (11/120)"
-                            local currentStr, maxStr = string.match(text, "%((%d+)/(%d+)%)")
-                            if currentStr and maxStr then
-                                latestCargo = currentStr .. " / " .. maxStr
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        
-        -- Update the UI with the live numbers parsed from the flying popups!
-        if latestCargo then
-            lblCountdown.Text = "Cargo: " .. latestCargo
-        end
-        
-        return foundFull
-    end)
+-- ==========================================
+-- EVENT-DRIVEN CARGO TRACKER
+-- ==========================================
+local isVehicleCurrentlyFull = false
+local latestCargoDisplay = "0 / 120"
+
+local function processText(text, instance)
+    if not text or typeof(text) ~= "string" or text == "" then return end
     
-    if not success then 
-        warn("Error checking full status: ", result) 
+    -- Distance check: Ensure this popup belongs to OUR vehicle, not another player's
+    if instance and hrp then
+        local pos = nil
+        local gui = instance:FindFirstAncestorOfClass("BillboardGui") or instance:FindFirstAncestorOfClass("SurfaceGui")
+        if gui then
+            local adornee = gui.Adornee or (gui.Parent and gui.Parent:IsA("BasePart") and gui.Parent)
+            if adornee then pos = adornee.Position end
+        end
+        
+        -- If we found a 3D position and it's further than 60 studs away, ignore it!
+        if pos and (pos - hrp.Position).Magnitude > 60 then
+            return 
+        end
+    end
+
+    local lowerText = string.lower(text)
+    
+    -- 1. Check for the red "VEHICLE FULL" popup
+    if string.find(lowerText, "vehicle full") then
+        isVehicleCurrentlyFull = true
     end
     
-    return success and result
+    -- 2. Extract live numbers from popups like "+1 Cobalt (11/120)"
+    local currentStr, maxStr = string.match(text, "%((%d+)/(%d+)%)")
+    if currentStr and maxStr then
+        latestCargoDisplay = currentStr .. " / " .. maxStr
+        if tonumber(currentStr) >= tonumber(maxStr) then
+            isVehicleCurrentlyFull = true
+        end
+    end
 end
+
+local function setupTracker(instance)
+    if instance:IsA("TextLabel") or instance:IsA("TextBox") then
+        -- Catch the text the millisecond the developer creates it
+        task.delay(0.05, function()
+            if instance.Parent then
+                processText(instance.ContentText ~= "" and instance.ContentText or instance.Text, instance)
+            end
+        end)
+        -- Listen instantly if the game dynamically changes existing text
+        instance:GetPropertyChangedSignal("Text"):Connect(function()
+            processText(instance.ContentText ~= "" and instance.ContentText or instance.Text, instance)
+        end)
+    end
+end
+
+-- Hook the listeners to catch fleeting popups instantly!
+workspace.DescendantAdded:Connect(setupTracker)
+player.PlayerGui.DescendantAdded:Connect(setupTracker)
+
+-- Scan existing items just in case they are already on screen when starting
+for _, v in pairs(player.PlayerGui:GetDescendants()) do setupTracker(v) end
+task.spawn(function()
+    for _, v in pairs(workspace:GetDescendants()) do setupTracker(v) end
+end)
 
 -- ==========================================
 -- 3. Core Logic Functions
@@ -257,12 +272,15 @@ local function mineFunc()
     if not isRunning then return end
     
     lblStatus.Text = "Status: Mining..."
-    lblCountdown.Text = "Cargo: Checking..."
+    isVehicleCurrentlyFull = false -- Always reset full status before we start mining
     
     -- Press W indefinitely until vehicle is full
     holdKey(Enum.KeyCode.W)
     
     while isRunning do
+        -- Constantly update the GUI with whatever the Event Tracker has found
+        lblCountdown.Text = "Cargo: " .. latestCargoDisplay
+        
         safeWait(0.5) -- Uses our new safeWait which handles pausing automatically
         
         -- Handle force early unload logic
@@ -272,7 +290,7 @@ local function mineFunc()
         end
         
         -- Handle Auto-unload logic
-        if checkVehicleFull() then
+        if isVehicleCurrentlyFull then
             break
         end
     end
