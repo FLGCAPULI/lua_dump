@@ -162,71 +162,51 @@ end
 
 local function checkVehicleFull()
     local success, result = pcall(function()
-        -- Helper to match common "Full" phrases AND fractional formats (e.g. 120/120)
-        local function isFullPhrase(text)
-            if not text or text == "" then return false end
-            local lowerText = string.lower(text)
-            
-            -- 1. Check for standard full words
-            if string.find(lowerText, "vehicle full") or string.find(lowerText, "storage full") or string.find(lowerText, "inventory full") or lowerText == "full" or lowerText == "max" then
-                return true
-            end
-            
-            -- 2. Explicitly check for 120/120 (avoids triggering on 100/100 health bars)
-            local capacityString = tostring(VEHICLE_CAPACITY) .. "/" .. tostring(VEHICLE_CAPACITY)
-            -- Use raw text rather than lowerText to match EXACT capacity strings
-            if string.find(text, capacityString) then
-                return true
-            end
-            
-            -- 3. Check for dynamic patterns like "120/120" or "Capacity: 120 / 120"
-            local currentStr, maxStr = string.match(lowerText, "(%d+)%s*/%s*(%d+)")
-            if currentStr and maxStr then
-                local current, max = tonumber(currentStr), tonumber(maxStr)
-                -- Must match your vehicle capacity to avoid false triggers like health
-                if current and max and max == VEHICLE_CAPACITY and current >= max then
-                    return true
+        local vehicle = nil
+        
+        -- 1. Try to find the vehicle by checking the seat the player is in
+        if character and character:FindFirstChild("Humanoid") and character.Humanoid.SeatPart then
+            local current = character.Humanoid.SeatPart
+            -- Walk up the tree to find the model containing the Attributes
+            while current and current ~= workspace do
+                if current:GetAttribute("Capacity") ~= nil or current:GetAttribute("MaxCapacity") ~= nil or current:GetAttribute("StoredOres") ~= nil then
+                    vehicle = current
+                    break
                 end
+                current = current.Parent
             end
             
-            return false
+            -- If we still didn't find attributes, just grab the main model
+            if not vehicle then
+                vehicle = character.Humanoid.SeatPart:FindFirstAncestorWhichIsA("Model")
+            end
         end
-
-        -- 1. Check Player's Screen GUI
-        for _, v in pairs(player.PlayerGui:GetDescendants()) do
-            if v:IsA("TextLabel") or v:IsA("TextBox") or v:IsA("TextButton") then
-                local textToCheck = (v.ContentText and v.ContentText ~= "") and v.ContentText or v.Text
-                if v.Visible and isFullPhrase(textToCheck) then
-                    return true
+        
+        -- 2. Fallback: Search Workspace.Vehicles if we aren't in a seat (or it failed)
+        if not vehicle then
+            local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+            if vehiclesFolder then
+                for _, v in pairs(vehiclesFolder:GetDescendants()) do
+                    if v:IsA("Model") and (v:GetAttribute("Capacity") ~= nil or v:GetAttribute("StoredOres") ~= nil) then
+                        vehicle = v
+                        break
+                    end
                 end
             end
         end
         
-        -- 2. Directly check the ExaDrill (or any vehicle) the player is currently sitting in
-        if character and character:FindFirstChild("Humanoid") and character.Humanoid.SeatPart then
-            -- Get the main vehicle model
-            local vehicle = character.Humanoid.SeatPart:FindFirstAncestorWhichIsA("Model")
+        -- 3. Read the Attributes
+        if vehicle then
+            -- Try common attribute names based on Ultimate Mining Tycoon
+            local maxCapacity = vehicle:GetAttribute("Capacity") or vehicle:GetAttribute("MaxCapacity") or VEHICLE_CAPACITY
+            local currentCargo = vehicle:GetAttribute("StoredOres") or vehicle:GetAttribute("OreCount") or vehicle:GetAttribute("CargoCount") or vehicle:GetAttribute("Ores")
             
-            if vehicle then
-                -- Check all text labels attached to the vehicle
-                for _, v in pairs(vehicle:GetDescendants()) do
-                    if v:IsA("TextLabel") or v:IsA("TextBox") or v:IsA("TextButton") then
-                        -- Check if the UI is actually enabled/visible before reading
-                        local gui = v:FindFirstAncestorOfClass("BillboardGui") or v:FindFirstAncestorOfClass("SurfaceGui")
-                        if (gui and gui.Enabled) or v.Visible then
-                            local textToCheck = (v.ContentText and v.ContentText ~= "") and v.ContentText or v.Text
-                            if isFullPhrase(textToCheck) then
-                                return true
-                            end
-                        end
-                    end
-                    
-                    -- Check for hidden Data Values (like a BoolValue named "IsFull" set to true)
-                    if v:IsA("BoolValue") and (string.find(string.lower(v.Name), "full") or string.find(string.lower(v.Name), "max")) then
-                        if v.Value == true then
-                            return true
-                        end
-                    end
+            if currentCargo and maxCapacity then
+                -- Update the UI so you can visually confirm it's reading the data!
+                lblCountdown.Text = "Cargo: " .. tostring(currentCargo) .. " / " .. tostring(maxCapacity)
+                
+                if tonumber(currentCargo) >= tonumber(maxCapacity) then
+                    return true
                 end
             end
         end
@@ -287,7 +267,7 @@ local function mineFunc()
     if not isRunning then return end
     
     lblStatus.Text = "Status: Mining..."
-    lblCountdown.Text = "Time: Waiting for Full"
+    lblCountdown.Text = "Cargo: Checking..."
     
     -- Press W indefinitely until vehicle is full
     holdKey(Enum.KeyCode.W)
