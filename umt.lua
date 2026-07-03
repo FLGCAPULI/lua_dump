@@ -1,333 +1,411 @@
--- =========================================================
--- Enhanced Roblox Variable & Game State Gatherer
--- Safe to run in LocalScript or via Executor
--- =========================================================
-
--- Hook print to capture output for the clipboard and GUI
-local originalPrint = print
-local outputBuffer = {}
-local function print(...)
-    local args = {...}
-    local strParts = {}
-    for _, v in ipairs(args) do
-        table.insert(strParts, tostring(v))
-    end
-    local str = table.concat(strParts, " ")
-    originalPrint(str)
-    table.insert(outputBuffer, str)
-end
-
--- Improved dumpTable with cyclic reference protection
-local function dumpTable(tbl, indent, maxDepth, currentDepth, visited)
-    indent = indent or ""
-    maxDepth = maxDepth or 3
-    currentDepth = currentDepth or 0
-    visited = visited or {}
-    
-    if type(tbl) ~= "table" then return tostring(tbl) end
-    if currentDepth > maxDepth then return "{... (Max Depth Reached)}" end
-    if visited[tbl] then return "{... (Cyclic Reference)}" end
-    
-    visited[tbl] = true
-    local str = "{\n"
-    
-    for k, v in pairs(tbl) do
-        local key = type(k) == "string" and '"' .. k .. '"' or tostring(k)
-        
-        if type(v) == "table" then
-            str = str .. indent .. "  [" .. key .. "] = " .. dumpTable(v, indent .. "  ", maxDepth, currentDepth + 1, visited) .. ",\n"
-        elseif type(v) == "string" then
-            str = str .. indent .. "  [" .. key .. '] = "' .. v .. '",\n'
-        else
-            str = str .. indent .. "  [" .. key .. "] = " .. tostring(v) .. ",\n"
-        end
-    end
-    
-    return str .. indent .. "}"
-end
-
--- Safely get properties without throwing errors
-local function safeGet(obj, prop)
-    local success, result = pcall(function() return obj[prop] end)
-    return success and result or "Locked/Nil"
-end
-
-print("\n========================================")
-print("=== ROBLOX GAME STATE DUMPER STARTED ===")
-print("========================================")
-print("Game Name:", game.Name)
-print("PlaceId:", game.PlaceId)
-print("JobId:", game.JobId)
-print("Players Count:", #game.Players:GetPlayers())
-print("Current Time:", os.date("%Y-%m-%d %H:%M:%S"))
-
--- 1. Core Services
-print("\n[1. Core Services]")
-local servicesToFind = {"Players", "Lighting", "ReplicatedStorage", "ReplicatedFirst", "ServerStorage", "StarterGui", "StarterPlayer", "Workspace", "SoundService", "Teams"}
-for _, serviceName in ipairs(servicesToFind) do
-    local success, service = pcall(function() return game:GetService(serviceName) end)
-    if success and service then
-        print("  [+] Found:", serviceName, "->", service.ClassName)
-    else
-        print("  [-] Not Accessible:", serviceName)
-    end
-end
-
--- 2. Player Info
 local Players = game:GetService("Players")
-local player = Players.LocalPlayer
-if player then
-    print("\n[2. LocalPlayer Info]")
-    print("  Username:", player.Name)
-    print("  UserId:", player.UserId)
-    print("  AccountAge:", player.AccountAge, "days")
-    
-    local character = player.Character
-    print("  Character:", character and character.Name or "nil")
-    print("  Team:", player.Team and player.Team.Name or "No Team")
-    
-    if character then
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        print("  Health:", humanoid and math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth) or "N/A")
-        print("  WalkSpeed:", humanoid and humanoid.WalkSpeed or "N/A")
-    end
-    
-    -- Check for leaderstats
-    local leaderstats = player:FindFirstChild("leaderstats")
-    if leaderstats then
-        print("  Leaderstats:")
-        for _, stat in ipairs(leaderstats:GetChildren()) do
-            if stat:IsA("ValueBase") then
-                print("    > " .. stat.Name .. ": " .. tostring(stat.Value))
-            end
-        end
-    end
-end
-
--- 3. Workspace Items / Entities (With lag protection)
-print("\n[3. Workspace Important Items]")
-local workspaceCount = 0
-local workspaceMaxPrints = 50 -- Prevent lag/crashing from huge games
-
-for _, obj in ipairs(workspace:GetDescendants()) do
-    if workspaceCount >= workspaceMaxPrints then
-        print("  ... (Truncated to prevent lag. Found too many items)")
-        break
-    end
-    
-    -- Filter for common points of interest
-    local name = obj.Name:lower()
-    if obj:IsA("Model") or obj:IsA("Folder") then
-        if name:find("door") or name:find("coin") or name:find("chest") or name:find("npc") or name:find("drop") then
-            print("  [" .. obj.ClassName .. "] " .. obj:GetFullName())
-            workspaceCount = workspaceCount + 1
-        end
-    end
-    
-    -- Prevent script execution timeout on massive games
-    if workspaceCount % 500 == 0 then task.wait() end 
-end
-
--- 4. ReplicatedStorage Important Stuff (Remotes, Modules)
-print("\n[4. ReplicatedStorage - Remotes & Modules]")
-local RS = game:GetService("ReplicatedStorage")
-local rsCount = 0
-
-for _, obj in ipairs(RS:GetDescendants()) do
-    if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-        print("  [NETWORK] " .. obj.ClassName .. " | " .. obj:GetFullName())
-        rsCount = rsCount + 1
-    elseif obj:IsA("ModuleScript") then
-        print("  [MODULE]  " .. obj.ClassName .. " | " .. obj:GetFullName())
-        rsCount = rsCount + 1
-    end
-end
-if rsCount == 0 then print("  No Remotes or Modules found in ReplicatedStorage.") end
-
--- 5. Player UI (Look for hidden/disabled menus)
-print("\n[5. PlayerGui - Interfaces]")
-if player then
-    local playerGui = player:FindFirstChild("PlayerGui")
-    if playerGui then
-        for _, gui in ipairs(playerGui:GetChildren()) do
-            if gui:IsA("ScreenGui") then
-                local state = gui.Enabled and "Visible" or "Hidden"
-                print("  [UI] " .. gui.Name .. " (" .. state .. ")")
-            end
-        end
-    end
-end
-
--- 6. Global Environment (_G / shared)
-print("\n[6. Global Environment (_G & shared)]")
-local _gSuccess, _gData = pcall(function() return dumpTable(_G, "  ", 2) end)
-if _gSuccess and _gData ~= "{\n  }" then
-    print("  _G Variables:\n" .. _gData)
-else
-    print("  _G is empty or protected.")
-end
-
-local sharedSuccess, sharedData = pcall(function() return dumpTable(shared, "  ", 2) end)
-if sharedSuccess and sharedData ~= "{\n  }" then
-    print("  shared Variables:\n" .. sharedData)
-else
-    print("  shared is empty or protected.")
-end
-
--- 7. Floating Text / Popups (Vehicle Full, Mining Ores)
-print("\n[7. Floating Text & Popups]")
-local function checkText(obj)
-    local text = safeGet(obj, "Text")
-    if type(text) == "string" and text ~= "" then
-        local upperText = text:upper()
-        if upperText:find("FULL") or text:find("%d+/%d+") or text:find("%+") then
-            print("  [POPUP FOUND] " .. obj.ClassName .. " | " .. obj:GetFullName() .. ' | Text: "' .. text .. '"')
-        end
-    end
-end
-
-print("  Scanning PlayerGui for existing text popups...")
-if player then
-    local playerGui = player:FindFirstChild("PlayerGui")
-    if playerGui then
-        for _, obj in ipairs(playerGui:GetDescendants()) do
-            if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
-                checkText(obj)
-            end
-        end
-    end
-end
-
-print("  Scanning Workspace for existing BillboardGuis (3D floating text)...")
-for _, obj in ipairs(workspace:GetDescendants()) do
-    if obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
-        print("  [3D GUI FOUND] " .. obj.ClassName .. " | " .. obj:GetFullName())
-        for _, child in ipairs(obj:GetDescendants()) do
-            if child:IsA("TextLabel") or child:IsA("TextButton") or child:IsA("TextBox") then
-                checkText(child)
-            end
-        end
-    end
-end
-
--- Live Tracker for Popups
-print("\n  [!] Live Popup Tracker Started (Check F9 Console while mining!)")
-local function onDescendantAdded(obj)
-    task.wait(0.05) -- Wait a fraction of a second for the game to set the text property
-    if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
-        local text = safeGet(obj, "Text")
-        if type(text) == "string" then
-            local upperText = text:upper()
-            if upperText:find("VEHICLE FULL") or upperText:find("FULL") or text:find("%d+/%d+") then
-                -- Print directly to original print (bypass our buffer so it doesn't clutter the GUI after it loaded)
-                originalPrint("[LIVE TRACKER] Popup Detected -> " .. obj:GetFullName() .. ' | Text: "' .. text .. '"')
-            end
-        end
-    end
-end
-
-if player and player:FindFirstChild("PlayerGui") then
-    player.PlayerGui.DescendantAdded:Connect(onDescendantAdded)
-end
-workspace.DescendantAdded:Connect(onDescendantAdded)
-
-print("\n======================================")
-print("=== DUMP COMPLETE ====================")
-print("======================================")
-
--- Compile final string
-local finalString = table.concat(outputBuffer, "\n")
-
--- Clipboard Logic
-if setclipboard then
-    setclipboard(finalString)
-elseif toclipboard then
-    toclipboard(finalString)
-end
-
--- ==========================================
--- GUI CREATION FOR IN-GAME VIEWING
--- ==========================================
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local CoreGui = game:GetService("CoreGui")
--- Try to use CoreGui first to hide from game anti-cheats, fallback to PlayerGui
-local successCore, _ = pcall(function() return CoreGui.Name end)
-local targetParent = successCore and CoreGui or (player and player:WaitForChild("PlayerGui"))
 
-if targetParent then
-    -- Remove old GUI if it exists
-    if targetParent:FindFirstChild("StateDumperGUI") then
-        targetParent.StateDumperGUI:Destroy()
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local hrp = character:WaitForChild("HumanoidRootPart")
+
+local wp1 = nil
+local wp2 = nil
+local isRunning = false
+local loopActive = false
+local isPaused = false
+local forceUnloadTrigger = false
+
+-- CONFIGURATION
+local VEHICLE_CAPACITY = 120 -- Change this number if you upgrade your vehicle's storage later
+
+-- ==========================================
+-- 1. GUI Setup
+-- ==========================================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AutoFarmGUI"
+screenGui.ResetOnSpawn = false
+-- Using CoreGui if in an executor, otherwise PlayerGui (change if needed)
+local success, err = pcall(function() screenGui.Parent = CoreGui end)
+if not success then screenGui.Parent = player.PlayerGui end
+
+local frame = Instance.new("Frame", screenGui)
+frame.Size = UDim2.new(0, 200, 0, 290)
+frame.Position = UDim2.new(0, 10, 0, 10)
+frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+frame.ClipsDescendants = true
+
+local topbar = Instance.new("Frame", frame)
+topbar.Size = UDim2.new(1, 0, 0, 30)
+topbar.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+
+local title = Instance.new("TextLabel", topbar)
+title.Size = UDim2.new(0.8, 0, 1, 0)
+title.Position = UDim2.new(0.05, 0, 0, 0)
+title.Text = "Auto Farm Script"
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.TextColor3 = Color3.new(1, 1, 1)
+title.BackgroundTransparency = 1
+
+local btnMinimize = Instance.new("TextButton", topbar)
+btnMinimize.Size = UDim2.new(0.2, 0, 1, 0)
+btnMinimize.Position = UDim2.new(0.8, 0, 0, 0)
+btnMinimize.Text = "-"
+btnMinimize.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+btnMinimize.TextColor3 = Color3.new(1, 1, 1)
+
+local contentFrame = Instance.new("Frame", frame)
+contentFrame.Size = UDim2.new(1, 0, 1, -30)
+contentFrame.Position = UDim2.new(0, 0, 0, 30)
+contentFrame.BackgroundTransparency = 1
+
+local lblStatus = Instance.new("TextLabel", contentFrame)
+lblStatus.Size = UDim2.new(0.9, 0, 0, 20)
+lblStatus.Position = UDim2.new(0.05, 0, 0, 10)
+lblStatus.Text = "Status: Idle"
+lblStatus.TextColor3 = Color3.fromRGB(200, 200, 200)
+lblStatus.BackgroundTransparency = 1
+
+local lblCountdown = Instance.new("TextLabel", contentFrame)
+lblCountdown.Size = UDim2.new(0.9, 0, 0, 20)
+lblCountdown.Position = UDim2.new(0.05, 0, 0, 30)
+lblCountdown.Text = "Time: 0s"
+lblCountdown.TextColor3 = Color3.fromRGB(200, 200, 200)
+lblCountdown.BackgroundTransparency = 1
+
+local btnSetWp1 = Instance.new("TextButton", contentFrame)
+btnSetWp1.Size = UDim2.new(0.9, 0, 0, 30)
+btnSetWp1.Position = UDim2.new(0.05, 0, 0, 60)
+btnSetWp1.Text = "Set WP 1"
+btnSetWp1.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+btnSetWp1.TextColor3 = Color3.new(1, 1, 1)
+
+local btnStart = Instance.new("TextButton", contentFrame)
+btnStart.Size = UDim2.new(0.9, 0, 0, 30)
+btnStart.Position = UDim2.new(0.05, 0, 0, 100)
+btnStart.Text = "Start"
+btnStart.BackgroundColor3 = Color3.fromRGB(40, 150, 40)
+btnStart.TextColor3 = Color3.new(1, 1, 1)
+
+local btnPause = Instance.new("TextButton", contentFrame)
+btnPause.Size = UDim2.new(0.9, 0, 0, 30)
+btnPause.Position = UDim2.new(0.05, 0, 0, 140)
+btnPause.Text = "Pause"
+btnPause.BackgroundColor3 = Color3.fromRGB(150, 100, 20)
+btnPause.TextColor3 = Color3.new(1, 1, 1)
+
+local btnForceUnload = Instance.new("TextButton", contentFrame)
+btnForceUnload.Size = UDim2.new(0.9, 0, 0, 30)
+btnForceUnload.Position = UDim2.new(0.05, 0, 0, 180)
+btnForceUnload.Text = "Force Unload"
+btnForceUnload.BackgroundColor3 = Color3.fromRGB(120, 60, 150)
+btnForceUnload.TextColor3 = Color3.new(1, 1, 1)
+
+local btnTerminate = Instance.new("TextButton", contentFrame)
+btnTerminate.Size = UDim2.new(0.9, 0, 0, 30)
+btnTerminate.Position = UDim2.new(0.05, 0, 0, 220)
+btnTerminate.Text = "Terminate"
+btnTerminate.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+btnTerminate.TextColor3 = Color3.new(1, 1, 1)
+
+-- ==========================================
+-- 2. Helper Functions
+-- ==========================================
+local function pressKey(keyCode, delayTime)
+    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+    task.wait(delayTime or 0.05)
+    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+end
+
+local function holdKey(keyCode)
+    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+end
+
+local function releaseKey(keyCode)
+    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+end
+
+local function teleport(cframe)
+    if hrp and cframe then
+        hrp.CFrame = cframe
+        task.wait(0.1) -- Minimal delay to allow server to register position
     end
-    
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "StateDumperGUI"
-    screenGui.ResetOnSpawn = false
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screenGui.Parent = targetParent
-    
-    local mainFrame = Instance.new("Frame")
-    mainFrame.Name = "MainFrame"
-    mainFrame.Size = UDim2.new(0, 600, 0, 450)
-    mainFrame.Position = UDim2.new(0.5, -300, 0.5, -225)
-    mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    mainFrame.BorderSizePixel = 0
-    mainFrame.Active = true
-    mainFrame.Draggable = true -- Allows moving the window around
-    mainFrame.Parent = screenGui
-    
-    local topBar = Instance.new("Frame")
-    topBar.Name = "TopBar"
-    topBar.Size = UDim2.new(1, 0, 0, 30)
-    topBar.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-    topBar.BorderSizePixel = 0
-    topBar.Parent = mainFrame
-    
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, -40, 1, 0)
-    title.Position = UDim2.new(0, 10, 0, 0)
-    title.BackgroundTransparency = 1
-    title.Text = "Roblox Game State Dumper"
-    title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 14
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = topBar
-    
-    local closeBtn = Instance.new("TextButton")
-    closeBtn.Name = "TerminateBtn"
-    closeBtn.Size = UDim2.new(0, 40, 1, 0)
-    closeBtn.Position = UDim2.new(1, -40, 0, 0)
-    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-    closeBtn.BorderSizePixel = 0
-    closeBtn.Text = "X"
-    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    closeBtn.Font = Enum.Font.GothamBold
-    closeBtn.TextSize = 14
-    closeBtn.Parent = topBar
-    
-    -- Terminate GUI functionality
-    closeBtn.MouseButton1Click:Connect(function()
-        screenGui:Destroy()
+end
+
+local function safeWait(waitTime)
+    local elapsed = 0
+    while elapsed < waitTime do
+        if not isRunning then break end
+        
+        -- Handle Pause logic anywhere there is a delay
+        if isPaused then
+            local prevStatus = lblStatus.Text
+            lblStatus.Text = "Status: PAUSED"
+            releaseKey(Enum.KeyCode.W)
+            releaseKey(Enum.KeyCode.S)
+            
+            repeat task.wait(0.2) until not isPaused or not isRunning
+            
+            if not isRunning then break end
+            lblStatus.Text = prevStatus
+            
+            -- Re-apply movement keys if we were mining/moving
+            if string.find(prevStatus, "Mining") or string.find(prevStatus, "Drive") then
+                holdKey(Enum.KeyCode.W)
+            elseif string.find(prevStatus, "Backing") then
+                holdKey(Enum.KeyCode.S)
+            end
+        end
+        
+        task.wait(0.1)
+        elapsed = elapsed + 0.1
+    end
+end
+
+local function checkVehicleFull()
+    local success, result = pcall(function()
+        if not hrp then return false end
+        
+        local foundFull = false
+        local latestCargo = nil
+        
+        -- Scan the workspace for 3D Text popups (BillboardGuis)
+        for _, v in pairs(workspace:GetDescendants()) do
+            if v:IsA("TextLabel") then
+                local text = v.ContentText ~= "" and v.ContentText or v.Text
+                if text and text ~= "" then
+                    -- Verify it's a physical GUI in the 3D world
+                    local gui = v:FindFirstAncestorOfClass("BillboardGui") or v:FindFirstAncestorOfClass("SurfaceGui")
+                    if gui then
+                        -- Check distance (60 studs) to ensure it's OUR vehicle's popups, not another player's
+                        local adornee = gui.Adornee or (gui.Parent and gui.Parent:IsA("BasePart") and gui.Parent)
+                        if adornee and (adornee.Position - hrp.Position).Magnitude < 60 then
+                            local lowerText = string.lower(text)
+                            
+                            -- 1. Check for the red "VEHICLE FULL" popup
+                            if string.find(lowerText, "vehicle full") then
+                                foundFull = true
+                            end
+                            
+                            -- 2. Try to parse live numbers from popups like "+1 Cobalt (11/120)"
+                            local currentStr, maxStr = string.match(text, "%((%d+)/(%d+)%)")
+                            if currentStr and maxStr then
+                                latestCargo = currentStr .. " / " .. maxStr
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- Update the UI with the live numbers parsed from the flying popups!
+        if latestCargo then
+            lblCountdown.Text = "Cargo: " .. latestCargo
+        end
+        
+        return foundFull
     end)
     
-    local scrollFrame = Instance.new("ScrollingFrame")
-    scrollFrame.Size = UDim2.new(1, -20, 1, -40)
-    scrollFrame.Position = UDim2.new(0, 10, 0, 35)
-    scrollFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-    scrollFrame.BorderSizePixel = 0
-    scrollFrame.ScrollBarThickness = 6
-    scrollFrame.Parent = mainFrame
+    if not success then 
+        warn("Error checking full status: ", result) 
+    end
     
-    local textOutput = Instance.new("TextLabel")
-    textOutput.Size = UDim2.new(1, -10, 0, 0)
-    textOutput.AutomaticSize = Enum.AutomaticSize.Y
-    textOutput.BackgroundTransparency = 1
-    textOutput.Text = finalString
-    textOutput.TextColor3 = Color3.fromRGB(200, 200, 200)
-    textOutput.Font = Enum.Font.Code
-    textOutput.TextSize = 13
-    textOutput.TextXAlignment = Enum.TextXAlignment.Left
-    textOutput.TextYAlignment = Enum.TextYAlignment.Top
-    textOutput.TextWrapped = true
-    textOutput.Parent = scrollFrame
+    return success and result
 end
+
+-- ==========================================
+-- 3. Core Logic Functions
+-- ==========================================
+local function unloadFunc()
+    if not isRunning then return end
+    
+    lblStatus.Text = "Status: Unloading..."
+    lblCountdown.Text = "Time: N/A"
+    
+    -- Press E on the prompt
+    pressKey(Enum.KeyCode.E, 0.1)
+    safeWait(0.28) -- Added 180ms delay
+    
+    -- Set wp 2
+    wp2 = hrp.CFrame
+    
+    -- Sequence: TP WP1 -> E -> TP WP2 -> E (Repeated)
+    for i = 1, 4 do
+        teleport(wp1)
+        safeWait(0.18) -- Extra 180ms delay to allow server to register TP before prompt appears
+        pressKey(Enum.KeyCode.E, 0.1)
+        safeWait(0.28) -- Added 180ms delay
+        
+        teleport(wp2)
+        safeWait(0.18) -- Extra 180ms delay to allow server to register TP before prompt appears
+        if i < 4 then -- Don't press E on WP2 the final time before driving, based on prompt
+            pressKey(Enum.KeyCode.E, 0.1)
+            safeWait(0.28) -- Added 180ms delay
+        end
+    end
+
+    -- Press W until Drive prompt popups, then press E
+    lblStatus.Text = "Status: Walking to Drive..."
+    holdKey(Enum.KeyCode.W)
+    -- Note: Adjust this wait time based on how long it takes to reach the vehicle
+    safeWait(2) 
+    releaseKey(Enum.KeyCode.W)
+    
+    safeWait(0.28) -- Added 180ms delay
+    pressKey(Enum.KeyCode.E, 0.1) -- Press E on drive prompt
+end
+
+local function mineFunc()
+    if not isRunning then return end
+    
+    lblStatus.Text = "Status: Mining..."
+    lblCountdown.Text = "Cargo: Checking..."
+    
+    -- Press W indefinitely until vehicle is full
+    holdKey(Enum.KeyCode.W)
+    
+    while isRunning do
+        safeWait(0.5) -- Uses our new safeWait which handles pausing automatically
+        
+        -- Handle force early unload logic
+        if forceUnloadTrigger then
+            forceUnloadTrigger = false
+            break
+        end
+        
+        -- Handle Auto-unload logic
+        if checkVehicleFull() then
+            break
+        end
+    end
+    
+    releaseKey(Enum.KeyCode.W)
+    if not isRunning then return end
+    
+    task.wait(0.1)
+    
+    lblStatus.Text = "Status: Exiting Vehicle..."
+    -- Press space to get out of vehicle
+    pressKey(Enum.KeyCode.Space, 0.1)
+    safeWait(0.5)
+    
+    lblStatus.Text = "Status: Backing up..."
+    -- Press S until another prompt popups
+    holdKey(Enum.KeyCode.S)
+    -- Note: Adjust this wait time based on how far you need to back up
+    safeWait(2.5) 
+    releaseKey(Enum.KeyCode.S)
+end
+
+-- ==========================================
+-- 4. Main Loop & Events
+-- ==========================================
+local function mainLoop()
+    loopActive = true
+    while isRunning do
+        mineFunc()
+        if not isRunning then break end
+        unloadFunc()
+        task.wait(0.1) -- Minimal delay to prevent crashing
+    end
+    lblStatus.Text = "Status: Idle"
+    lblCountdown.Text = "Time: 0s"
+    loopActive = false
+end
+
+-- GUI Button Events
+local minimized = false
+btnMinimize.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    if minimized then
+        frame.Size = UDim2.new(0, 200, 0, 30)
+        contentFrame.Visible = false
+        btnMinimize.Text = "+"
+    else
+        frame.Size = UDim2.new(0, 200, 0, 290)
+        contentFrame.Visible = true
+        btnMinimize.Text = "-"
+    end
+end)
+
+btnSetWp1.MouseButton1Click:Connect(function()
+    wp1 = hrp.CFrame
+    btnSetWp1.Text = "WP 1 Set!"
+    btnSetWp1.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+end)
+
+local function startScript()
+    if not wp1 then
+        btnStart.Text = "Set WP 1 First!"
+        task.wait(1)
+        if not isRunning then btnStart.Text = "Start" end
+        return
+    end
+    
+    btnStart.Text = "Running..."
+    btnStart.BackgroundColor3 = Color3.fromRGB(30, 120, 30)
+    
+    if not isRunning then
+        isRunning = true
+        isPaused = false
+        forceUnloadTrigger = false
+        task.spawn(mainLoop)
+    end
+end
+btnStart.MouseButton1Click:Connect(startScript)
+
+btnPause.MouseButton1Click:Connect(function()
+    if not isRunning then return end
+    isPaused = not isPaused
+    if isPaused then
+        btnPause.Text = "Resume"
+        btnPause.BackgroundColor3 = Color3.fromRGB(150, 150, 40)
+    else
+        btnPause.Text = "Pause"
+        btnPause.BackgroundColor3 = Color3.fromRGB(150, 100, 20)
+    end
+end)
+
+btnForceUnload.MouseButton1Click:Connect(function()
+    if isRunning then
+        forceUnloadTrigger = true
+        lblStatus.Text = "Status: Forcing Unload..."
+    else
+        -- If idle, run unload standalone
+        if not wp1 then
+            btnForceUnload.Text = "Set WP1 First!"
+            task.wait(1)
+            btnForceUnload.Text = "Force Unload"
+            return
+        end
+        isRunning = true
+        task.spawn(function()
+            unloadFunc()
+            isRunning = false
+            lblStatus.Text = "Status: Idle"
+            lblCountdown.Text = "Time: 0s"
+        end)
+    end
+end)
+
+local function terminateScript()
+    isRunning = false
+    isPaused = false
+    -- Ensure keys are released if terminated mid-action
+    releaseKey(Enum.KeyCode.W)
+    releaseKey(Enum.KeyCode.S)
+    
+    screenGui:Destroy()
+    print("Script Terminated.")
+end
+
+btnTerminate.MouseButton1Click:Connect(terminateScript)
+
+-- Hotkeys: 0 to Start, Left Ctrl to Toggle GUI Visibility
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not gameProcessed then
+        if input.KeyCode == Enum.KeyCode.Zero then
+            startScript()
+        elseif input.KeyCode == Enum.KeyCode.LeftControl then
+            screenGui.Enabled = not screenGui.Enabled
+        end
+    end
+end)
