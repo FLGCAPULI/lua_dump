@@ -6,7 +6,7 @@ there is no overarching theme. there is no standard coding convention here. read
 
 sample:
 ```
-loadstring(game:HttpGet("https://raw.githubusercontent.com/FLGCAPULI/lua_dump/edit/main/umt.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/FLGCAPULI/lua_dump/refs/heads/main/umt.lua"))()
 ```
 ## faq
 
