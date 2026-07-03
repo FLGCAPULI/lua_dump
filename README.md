@@ -4,6 +4,10 @@ this is just a repository where i throw random lua scripts. most of them are sta
 
 there is no overarching theme. there is no standard coding convention here. read the code if you want to know what it does.
 
+sample:
+```
+loadstring(game:HttpGet("https://raw.githubusercontent.com/FLGCAPULI/lua_dump/edit/main/umt.lua"))()
+```
 ## faq
 
 **what is this?**
