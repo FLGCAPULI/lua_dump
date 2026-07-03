@@ -11,6 +11,8 @@ local wp1 = nil
 local wp2 = nil
 local isRunning = false
 local loopActive = false
+local isPaused = false
+local forceUnloadTrigger = false
 
 -- ==========================================
 -- 1. GUI Setup
@@ -23,7 +25,7 @@ local success, err = pcall(function() screenGui.Parent = CoreGui end)
 if not success then screenGui.Parent = player.PlayerGui end
 
 local frame = Instance.new("Frame", screenGui)
-frame.Size = UDim2.new(0, 200, 0, 220)
+frame.Size = UDim2.new(0, 200, 0, 290)
 frame.Position = UDim2.new(0, 10, 0, 10)
 frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 frame.ClipsDescendants = true
@@ -80,10 +82,24 @@ btnStart.Text = "Start"
 btnStart.BackgroundColor3 = Color3.fromRGB(40, 150, 40)
 btnStart.TextColor3 = Color3.new(1, 1, 1)
 
+local btnPause = Instance.new("TextButton", contentFrame)
+btnPause.Size = UDim2.new(0.9, 0, 0, 30)
+btnPause.Position = UDim2.new(0.05, 0, 0, 140)
+btnPause.Text = "Pause"
+btnPause.BackgroundColor3 = Color3.fromRGB(150, 100, 20)
+btnPause.TextColor3 = Color3.new(1, 1, 1)
+
+local btnForceUnload = Instance.new("TextButton", contentFrame)
+btnForceUnload.Size = UDim2.new(0.9, 0, 0, 30)
+btnForceUnload.Position = UDim2.new(0.05, 0, 0, 180)
+btnForceUnload.Text = "Force Unload"
+btnForceUnload.BackgroundColor3 = Color3.fromRGB(120, 60, 150)
+btnForceUnload.TextColor3 = Color3.new(1, 1, 1)
+
 local btnTerminate = Instance.new("TextButton", contentFrame)
 btnTerminate.Size = UDim2.new(0.9, 0, 0, 30)
-btnTerminate.Position = UDim2.new(0.05, 0, 0, 140)
-btnTerminate.Text = "Terminate (or Press 0)"
+btnTerminate.Position = UDim2.new(0.05, 0, 0, 220)
+btnTerminate.Text = "Terminate"
 btnTerminate.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
 btnTerminate.TextColor3 = Color3.new(1, 1, 1)
 
@@ -111,6 +127,64 @@ local function teleport(cframe)
     end
 end
 
+local function safeWait(waitTime)
+    local elapsed = 0
+    while elapsed < waitTime do
+        if not isRunning then break end
+        
+        -- Handle Pause logic anywhere there is a delay
+        if isPaused then
+            local prevStatus = lblStatus.Text
+            lblStatus.Text = "Status: PAUSED"
+            releaseKey(Enum.KeyCode.W)
+            releaseKey(Enum.KeyCode.S)
+            
+            repeat task.wait(0.2) until not isPaused or not isRunning
+            
+            if not isRunning then break end
+            lblStatus.Text = prevStatus
+            
+            -- Re-apply movement keys if we were mining/moving
+            if string.find(prevStatus, "Mining") or string.find(prevStatus, "Drive") then
+                holdKey(Enum.KeyCode.W)
+            elseif string.find(prevStatus, "Backing") then
+                holdKey(Enum.KeyCode.S)
+            end
+        end
+        
+        task.wait(0.1)
+        elapsed = elapsed + 0.1
+    end
+end
+
+local function checkVehicleFull()
+    local success, result = pcall(function()
+        -- 1. Check Player's Screen GUI
+        for _, v in pairs(player.PlayerGui:GetDescendants()) do
+            if v:IsA("TextLabel") or v:IsA("TextBox") or v:IsA("TextButton") then
+                if v.Text and string.find(string.lower(v.Text), "vehicle full") then
+                    return true
+                end
+            end
+        end
+        
+        -- 2. Check for Popup Text (BillboardGui) directly on the vehicle
+        if character and character:FindFirstChild("Humanoid") and character.Humanoid.SeatPart then
+            local vehicle = character.Humanoid.SeatPart.Parent
+            for _, v in pairs(vehicle:GetDescendants()) do
+                if v:IsA("TextLabel") and v.Text then
+                    if string.find(string.lower(v.Text), "vehicle full") then
+                        return true
+                    end
+                end
+            end
+        end
+        
+        return false
+    end)
+    return success and result
+end
+
 -- ==========================================
 -- 3. Core Logic Functions
 -- ==========================================
@@ -122,7 +196,7 @@ local function unloadFunc()
     
     -- Press E on the prompt
     pressKey(Enum.KeyCode.E, 0.1)
-    task.wait(0.28) -- Added 180ms delay
+    safeWait(0.28) -- Added 180ms delay
     
     -- Set wp 2
     wp2 = hrp.CFrame
@@ -130,25 +204,26 @@ local function unloadFunc()
     -- Sequence: TP WP1 -> E -> TP WP2 -> E (Repeated)
     for i = 1, 4 do
         teleport(wp1)
-        task.wait(0.18) -- Extra 180ms delay to allow server to register TP before prompt appears
+        safeWait(0.18) -- Extra 180ms delay to allow server to register TP before prompt appears
         pressKey(Enum.KeyCode.E, 0.1)
-        task.wait(0.28) -- Added 180ms delay
+        safeWait(0.28) -- Added 180ms delay
         
         teleport(wp2)
-        task.wait(0.18) -- Extra 180ms delay to allow server to register TP before prompt appears
+        safeWait(0.18) -- Extra 180ms delay to allow server to register TP before prompt appears
         if i < 4 then -- Don't press E on WP2 the final time before driving, based on prompt
             pressKey(Enum.KeyCode.E, 0.1)
-            task.wait(0.28) -- Added 180ms delay
+            safeWait(0.28) -- Added 180ms delay
         end
     end
 
     -- Press W until Drive prompt popups, then press E
+    lblStatus.Text = "Status: Walking to Drive..."
     holdKey(Enum.KeyCode.W)
     -- Note: Adjust this wait time based on how long it takes to reach the vehicle
-    task.wait(2) 
+    safeWait(2) 
     releaseKey(Enum.KeyCode.W)
     
-    task.wait(0.28) -- Added 180ms delay
+    safeWait(0.28) -- Added 180ms delay
     pressKey(Enum.KeyCode.E, 0.1) -- Press E on drive prompt
 end
 
@@ -156,36 +231,41 @@ local function mineFunc()
     if not isRunning then return end
     
     lblStatus.Text = "Status: Mining..."
-    lblCountdown.Text = "Time: 60s"
+    lblCountdown.Text = "Time: Waiting for Full"
     
-    -- Press W for 1 min
+    -- Press W indefinitely until vehicle is full
     holdKey(Enum.KeyCode.W)
     
-    -- Wait 60 seconds (broken into smaller checks to allow early termination and countdown updates)
-    for i = 1, 600 do
-        if not isRunning then break end
+    while isRunning do
+        safeWait(0.5) -- Uses our new safeWait which handles pausing automatically
         
-        -- Update countdown label every full second (10 ticks = 1 second)
-        if i % 10 == 0 then
-            lblCountdown.Text = "Time: " .. tostring(60 - (i/10)) .. "s"
+        -- Handle force early unload logic
+        if forceUnloadTrigger then
+            forceUnloadTrigger = false
+            break
         end
         
-        task.wait(0.1)
+        -- Handle Auto-unload logic
+        if checkVehicleFull() then
+            break
+        end
     end
+    
     releaseKey(Enum.KeyCode.W)
+    if not isRunning then return end
     
     task.wait(0.1)
     
     lblStatus.Text = "Status: Exiting Vehicle..."
     -- Press space to get out of vehicle
     pressKey(Enum.KeyCode.Space, 0.1)
-    task.wait(0.5)
+    safeWait(0.5)
     
     lblStatus.Text = "Status: Backing up..."
     -- Press S until another prompt popups
     holdKey(Enum.KeyCode.S)
     -- Note: Adjust this wait time based on how far you need to back up
-    task.wait(2.5) 
+    safeWait(2.5) 
     releaseKey(Enum.KeyCode.S)
 end
 
@@ -214,7 +294,7 @@ btnMinimize.MouseButton1Click:Connect(function()
         contentFrame.Visible = false
         btnMinimize.Text = "+"
     else
-        frame.Size = UDim2.new(0, 200, 0, 220)
+        frame.Size = UDim2.new(0, 200, 0, 290)
         contentFrame.Visible = true
         btnMinimize.Text = "-"
     end
@@ -226,7 +306,7 @@ btnSetWp1.MouseButton1Click:Connect(function()
     btnSetWp1.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
 end)
 
-btnStart.MouseButton1Click:Connect(function()
+local function startScript()
     if not wp1 then
         btnStart.Text = "Set WP 1 First!"
         task.wait(1)
@@ -239,12 +319,50 @@ btnStart.MouseButton1Click:Connect(function()
     
     if not isRunning then
         isRunning = true
+        isPaused = false
+        forceUnloadTrigger = false
         task.spawn(mainLoop)
+    end
+end
+btnStart.MouseButton1Click:Connect(startScript)
+
+btnPause.MouseButton1Click:Connect(function()
+    if not isRunning then return end
+    isPaused = not isPaused
+    if isPaused then
+        btnPause.Text = "Resume"
+        btnPause.BackgroundColor3 = Color3.fromRGB(150, 150, 40)
+    else
+        btnPause.Text = "Pause"
+        btnPause.BackgroundColor3 = Color3.fromRGB(150, 100, 20)
+    end
+end)
+
+btnForceUnload.MouseButton1Click:Connect(function()
+    if isRunning then
+        forceUnloadTrigger = true
+        lblStatus.Text = "Status: Forcing Unload..."
+    else
+        -- If idle, run unload standalone
+        if not wp1 then
+            btnForceUnload.Text = "Set WP1 First!"
+            task.wait(1)
+            btnForceUnload.Text = "Force Unload"
+            return
+        end
+        isRunning = true
+        task.spawn(function()
+            unloadFunc()
+            isRunning = false
+            lblStatus.Text = "Status: Idle"
+            lblCountdown.Text = "Time: 0s"
+        end)
     end
 end)
 
 local function terminateScript()
     isRunning = false
+    isPaused = false
     -- Ensure keys are released if terminated mid-action
     releaseKey(Enum.KeyCode.W)
     releaseKey(Enum.KeyCode.S)
@@ -255,9 +373,13 @@ end
 
 btnTerminate.MouseButton1Click:Connect(terminateScript)
 
--- Hotkey 0 to terminate
+-- Hotkeys: 0 to Start, Left Ctrl to Toggle GUI Visibility
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if not gameProcessed and input.KeyCode == Enum.KeyCode.Zero then
-        terminateScript()
+    if not gameProcessed then
+        if input.KeyCode == Enum.KeyCode.Zero then
+            startScript()
+        elseif input.KeyCode == Enum.KeyCode.LeftControl then
+            screenGui.Enabled = not screenGui.Enabled
+        end
     end
 end)
