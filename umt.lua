@@ -23,7 +23,6 @@ local VEHICLE_CAPACITY = 120 -- Change this number if you upgrade your vehicle's
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "AutoFarmGUI"
 screenGui.ResetOnSpawn = false
--- Using CoreGui if in an executor, otherwise PlayerGui (change if needed)
 local success, err = pcall(function() screenGui.Parent = CoreGui end)
 if not success then screenGui.Parent = player.PlayerGui end
 
@@ -107,7 +106,7 @@ btnTerminate.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
 btnTerminate.TextColor3 = Color3.new(1, 1, 1)
 
 -- ==========================================
--- 2. Helper Functions
+-- 2. Helper Functions & Scanners
 -- ==========================================
 local function pressKey(keyCode, delayTime)
     VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
@@ -126,7 +125,7 @@ end
 local function teleport(cframe)
     if hrp and cframe then
         hrp.CFrame = cframe
-        task.wait(0.1) -- Minimal delay to allow server to register position
+        task.wait(0.1)
     end
 end
 
@@ -135,7 +134,6 @@ local function safeWait(waitTime)
     while elapsed < waitTime do
         if not isRunning then break end
         
-        -- Handle Pause logic anywhere there is a delay
         if isPaused then
             local prevStatus = lblStatus.Text
             lblStatus.Text = "Status: PAUSED"
@@ -147,7 +145,6 @@ local function safeWait(waitTime)
             if not isRunning then break end
             lblStatus.Text = prevStatus
             
-            -- Re-apply movement keys if we were mining/moving
             if string.find(prevStatus, "Mining") or string.find(prevStatus, "Drive") then
                 holdKey(Enum.KeyCode.W)
             elseif string.find(prevStatus, "Backing") then
@@ -160,71 +157,73 @@ local function safeWait(waitTime)
     end
 end
 
--- ==========================================
--- EVENT-DRIVEN CARGO TRACKER
--- ==========================================
-local isVehicleCurrentlyFull = false
-local latestCargoDisplay = "0 / 120"
-
-local function processText(text, instance)
-    if not text or typeof(text) ~= "string" or text == "" then return end
+-- TARGETED VEHICLE SCANNER
+local function getVehicleCargoData()
+    local isFull = false
+    local cargoText = nil
     
-    -- Distance check: Ensure this popup belongs to OUR vehicle, not another player's
-    if instance and hrp then
-        local pos = nil
-        local gui = instance:FindFirstAncestorOfClass("BillboardGui") or instance:FindFirstAncestorOfClass("SurfaceGui")
-        if gui then
-            local adornee = gui.Adornee or (gui.Parent and gui.Parent:IsA("BasePart") and gui.Parent)
-            if adornee then pos = adornee.Position end
+    local function evaluateText(text)
+        if not text or text == "" then return end
+        local lowerText = string.lower(text)
+        
+        -- 1. Check for literal red "VEHICLE FULL" text
+        if string.find(lowerText, "vehicle full") then
+            isFull = true
         end
         
-        -- If we found a 3D position and it's further than 60 studs away, ignore it!
-        if pos and (pos - hrp.Position).Magnitude > 60 then
-            return 
-        end
-    end
-
-    local lowerText = string.lower(text)
-    
-    -- 1. Check for the red "VEHICLE FULL" popup
-    if string.find(lowerText, "vehicle full") then
-        isVehicleCurrentlyFull = true
-    end
-    
-    -- 2. Extract live numbers from popups like "+1 Cobalt (11/120)"
-    local currentStr, maxStr = string.match(text, "%((%d+)/(%d+)%)")
-    if currentStr and maxStr then
-        latestCargoDisplay = currentStr .. " / " .. maxStr
-        if tonumber(currentStr) >= tonumber(maxStr) then
-            isVehicleCurrentlyFull = true
-        end
-    end
-end
-
-local function setupTracker(instance)
-    if instance:IsA("TextLabel") or instance:IsA("TextBox") then
-        -- Catch the text the millisecond the developer creates it
-        task.delay(0.05, function()
-            if instance.Parent then
-                processText(instance.ContentText ~= "" and instance.ContentText or instance.Text, instance)
+        -- 2. Extract "(11/120)" style patterns
+        local cStr, mStr = string.match(lowerText, "(%d+)%s*/%s*(%d+)")
+        if cStr and mStr then
+            local current = tonumber(cStr)
+            local maxCap = tonumber(mStr)
+            
+            -- ENSURE max capacity matches the drill! (This ignores your 100/100 Health Bar)
+            if maxCap == VEHICLE_CAPACITY then
+                cargoText = tostring(current) .. " / " .. tostring(maxCap)
+                if current >= maxCap then
+                    isFull = true
+                end
             end
-        end)
-        -- Listen instantly if the game dynamically changes existing text
-        instance:GetPropertyChangedSignal("Text"):Connect(function()
-            processText(instance.ContentText ~= "" and instance.ContentText or instance.Text, instance)
-        end)
+        end
     end
+
+    pcall(function()
+        -- Scan A: Check Workspace.Vehicles folder (Fast & Targetted)
+        local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+        if vehiclesFolder then
+            for _, vehicle in ipairs(vehiclesFolder:GetChildren()) do
+                if vehicle:IsA("Model") then
+                    -- Check Attributes
+                    local current = vehicle:GetAttribute("StoredOres") or vehicle:GetAttribute("Cargo") or vehicle:GetAttribute("OreCount")
+                    local maxCap = vehicle:GetAttribute("Capacity") or vehicle:GetAttribute("MaxCapacity")
+                    
+                    if current and maxCap and tonumber(maxCap) == VEHICLE_CAPACITY then
+                        cargoText = tostring(current) .. " / " .. tostring(maxCap)
+                        if tonumber(current) >= tonumber(maxCap) then
+                            isFull = true
+                        end
+                    end
+                    
+                    -- Check physical TextLabels on the vehicle model
+                    for _, desc in ipairs(vehicle:GetDescendants()) do
+                        if desc:IsA("TextLabel") then
+                            evaluateText(desc.ContentText ~= "" and desc.ContentText or desc.Text)
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- Scan B: Check PlayerGui (In case the popups are actually 2D UI rendered above the screen)
+        for _, desc in ipairs(player.PlayerGui:GetDescendants()) do
+            if desc:IsA("TextLabel") then
+                evaluateText(desc.ContentText ~= "" and desc.ContentText or desc.Text)
+            end
+        end
+    end)
+    
+    return isFull, cargoText
 end
-
--- Hook the listeners to catch fleeting popups instantly!
-workspace.DescendantAdded:Connect(setupTracker)
-player.PlayerGui.DescendantAdded:Connect(setupTracker)
-
--- Scan existing items just in case they are already on screen when starting
-for _, v in pairs(player.PlayerGui:GetDescendants()) do setupTracker(v) end
-task.spawn(function()
-    for _, v in pairs(workspace:GetDescendants()) do setupTracker(v) end
-end)
 
 -- ==========================================
 -- 3. Core Logic Functions
@@ -235,62 +234,54 @@ local function unloadFunc()
     lblStatus.Text = "Status: Unloading..."
     lblCountdown.Text = "Time: N/A"
     
-    -- Press E on the prompt
     pressKey(Enum.KeyCode.E, 0.1)
-    safeWait(0.28) -- Added 180ms delay
+    safeWait(0.28)
     
-    -- Set wp 2
     wp2 = hrp.CFrame
     
-    -- Sequence: TP WP1 -> E -> TP WP2 -> E (Repeated)
     for i = 1, 4 do
         teleport(wp1)
-        safeWait(0.18) -- Extra 180ms delay to allow server to register TP before prompt appears
+        safeWait(0.18)
         pressKey(Enum.KeyCode.E, 0.1)
-        safeWait(0.28) -- Added 180ms delay
+        safeWait(0.28)
         
         teleport(wp2)
-        safeWait(0.18) -- Extra 180ms delay to allow server to register TP before prompt appears
-        if i < 4 then -- Don't press E on WP2 the final time before driving, based on prompt
+        safeWait(0.18)
+        if i < 4 then
             pressKey(Enum.KeyCode.E, 0.1)
-            safeWait(0.28) -- Added 180ms delay
+            safeWait(0.28)
         end
     end
 
-    -- Press W until Drive prompt popups, then press E
     lblStatus.Text = "Status: Walking to Drive..."
     holdKey(Enum.KeyCode.W)
-    -- Note: Adjust this wait time based on how long it takes to reach the vehicle
     safeWait(2) 
     releaseKey(Enum.KeyCode.W)
     
-    safeWait(0.28) -- Added 180ms delay
-    pressKey(Enum.KeyCode.E, 0.1) -- Press E on drive prompt
+    safeWait(0.28)
+    pressKey(Enum.KeyCode.E, 0.1) 
 end
 
 local function mineFunc()
     if not isRunning then return end
     
     lblStatus.Text = "Status: Mining..."
-    isVehicleCurrentlyFull = false -- Always reset full status before we start mining
+    lblCountdown.Text = "Cargo: Checking..."
     
-    -- Press W indefinitely until vehicle is full
     holdKey(Enum.KeyCode.W)
     
     while isRunning do
-        -- Constantly update the GUI with whatever the Event Tracker has found
-        lblCountdown.Text = "Cargo: " .. latestCargoDisplay
+        -- Constantly fetch the live state every 0.5 seconds
+        local isFull, cargoText = getVehicleCargoData()
         
-        safeWait(0.5) -- Uses our new safeWait which handles pausing automatically
-        
-        -- Handle force early unload logic
-        if forceUnloadTrigger then
-            forceUnloadTrigger = false
-            break
+        if cargoText then
+            lblCountdown.Text = "Cargo: " .. cargoText
         end
         
-        -- Handle Auto-unload logic
-        if isVehicleCurrentlyFull then
+        safeWait(0.5) 
+        
+        if forceUnloadTrigger or isFull then
+            forceUnloadTrigger = false
             break
         end
     end
@@ -301,14 +292,11 @@ local function mineFunc()
     task.wait(0.1)
     
     lblStatus.Text = "Status: Exiting Vehicle..."
-    -- Press space to get out of vehicle
     pressKey(Enum.KeyCode.Space, 0.1)
     safeWait(0.5)
     
     lblStatus.Text = "Status: Backing up..."
-    -- Press S until another prompt popups
     holdKey(Enum.KeyCode.S)
-    -- Note: Adjust this wait time based on how far you need to back up
     safeWait(2.5) 
     releaseKey(Enum.KeyCode.S)
 end
@@ -322,14 +310,13 @@ local function mainLoop()
         mineFunc()
         if not isRunning then break end
         unloadFunc()
-        task.wait(0.1) -- Minimal delay to prevent crashing
+        task.wait(0.1)
     end
     lblStatus.Text = "Status: Idle"
     lblCountdown.Text = "Time: 0s"
     loopActive = false
 end
 
--- GUI Button Events
 local minimized = false
 btnMinimize.MouseButton1Click:Connect(function()
     minimized = not minimized
@@ -387,7 +374,6 @@ btnForceUnload.MouseButton1Click:Connect(function()
         forceUnloadTrigger = true
         lblStatus.Text = "Status: Forcing Unload..."
     else
-        -- If idle, run unload standalone
         if not wp1 then
             btnForceUnload.Text = "Set WP1 First!"
             task.wait(1)
@@ -407,17 +393,14 @@ end)
 local function terminateScript()
     isRunning = false
     isPaused = false
-    -- Ensure keys are released if terminated mid-action
     releaseKey(Enum.KeyCode.W)
     releaseKey(Enum.KeyCode.S)
-    
     screenGui:Destroy()
     print("Script Terminated.")
 end
 
 btnTerminate.MouseButton1Click:Connect(terminateScript)
 
--- Hotkeys: 0 to Start, Left Ctrl to Toggle GUI Visibility
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if not gameProcessed then
         if input.KeyCode == Enum.KeyCode.Zero then
