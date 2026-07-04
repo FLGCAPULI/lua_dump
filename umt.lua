@@ -44,7 +44,7 @@ if not success then
 end
 
 local frame = Instance.new("Frame", screenGui)
-frame.Size = UDim2.new(0, 200, 0, 410)
+frame.Size = UDim2.new(0, 200, 0, 450) -- Increased height to fit Explosion button
 frame.Position = UDim2.new(0, 10, 0, 10)
 frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 frame.ClipsDescendants = true
@@ -136,9 +136,16 @@ btnTpPlot.Text = "TP to Plot"
 btnTpPlot.BackgroundColor3 = Color3.fromRGB(80, 150, 80)
 btnTpPlot.TextColor3 = Color3.new(1, 1, 1)
 
+local btnExplode = Instance.new("TextButton", contentFrame)
+btnExplode.Size = UDim2.new(0.9, 0, 0, 30)
+btnExplode.Position = UDim2.new(0.05, 0, 0, 340)
+btnExplode.Text = "Spawn Explosion"
+btnExplode.BackgroundColor3 = Color3.fromRGB(150, 80, 20)
+btnExplode.TextColor3 = Color3.new(1, 1, 1)
+
 local btnTerminate = Instance.new("TextButton", contentFrame)
 btnTerminate.Size = UDim2.new(0.9, 0, 0, 30)
-btnTerminate.Position = UDim2.new(0.05, 0, 0, 340)
+btnTerminate.Position = UDim2.new(0.05, 0, 0, 380)
 btnTerminate.Text = "Terminate"
 btnTerminate.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
 btnTerminate.TextColor3 = Color3.new(1, 1, 1)
@@ -419,7 +426,7 @@ btnMinimize.MouseButton1Click:Connect(function()
         contentFrame.Visible = false
         btnMinimize.Text = "+"
     else
-        frame.Size = UDim2.new(0, 200, 0, 410)
+        frame.Size = UDim2.new(0, 200, 0, 450)
         contentFrame.Visible = true
         btnMinimize.Text = "-"
     end
@@ -536,6 +543,24 @@ btnTpPlot.MouseButton1Click:Connect(function()
         end
     else
         lblStatus.Text = "Status: Plots folder missing!"
+    end
+end)
+
+btnExplode.MouseButton1Click:Connect(function()
+    local hrp = getHRP()
+    if hrp then
+        local explosion = Instance.new("Explosion")
+        explosion.Name = "Explosion"
+        explosion.BlastPressure = 10000
+        explosion.BlastRadius = 60
+        explosion.DestroyJointRadiusPercent = 0
+        explosion.ExplosionType = Enum.ExplosionType.NoCraters
+        explosion.Position = hrp.Position
+        explosion.Parent = workspace
+        
+        lblStatus.Text = "Status: Boom!"
+    else
+        lblStatus.Text = "Status: Spawn First!"
     end
 end)
 
