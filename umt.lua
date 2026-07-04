@@ -1,11 +1,22 @@
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
-local CoreGui = game:GetService("CoreGui")
 
+-- Wait securely for the player to exist (fixes auto-execute bugs)
 local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local hrp = character:WaitForChild("HumanoidRootPart")
+while not player do
+    task.wait(0.1)
+    player = Players.LocalPlayer
+end
+
+-- Helper to dynamically get HRP so the script doesn't break when you die/respawn
+local function getHRP()
+    local char = player.Character
+    if char then
+        return char:FindFirstChild("HumanoidRootPart")
+    end
+    return nil
+end
 
 local wp1 = nil
 local wp2 = nil
@@ -15,19 +26,25 @@ local isPaused = false
 local forceUnloadTrigger = false
 
 -- CONFIGURATION
-local VEHICLE_CAPACITY = 120 -- Change this number if you upgrade your vehicle's storage later
+local VEHICLE_CAPACITY = 120 
 
 -- ==========================================
--- 1. GUI Setup
+-- 1. GUI Setup (Executor Safe)
 -- ==========================================
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "AutoFarmGUI"
 screenGui.ResetOnSpawn = false
-local success, err = pcall(function() screenGui.Parent = CoreGui end)
-if not success then screenGui.Parent = player.PlayerGui end
+
+-- Safely attempt to parent to CoreGui without triggering security exceptions at the top level
+local success = pcall(function()
+    screenGui.Parent = game:GetService("CoreGui")
+end)
+if not success then 
+    screenGui.Parent = player:WaitForChild("PlayerGui") 
+end
 
 local frame = Instance.new("Frame", screenGui)
-frame.Size = UDim2.new(0, 200, 0, 410) -- Increased height to fit TP Plot button
+frame.Size = UDim2.new(0, 200, 0, 410)
 frame.Position = UDim2.new(0, 10, 0, 10)
 frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 frame.ClipsDescendants = true
@@ -144,6 +161,7 @@ local function releaseKey(keyCode)
 end
 
 local function teleport(cframe)
+    local hrp = getHRP()
     if hrp and cframe then
         hrp.CFrame = cframe
         task.wait(0.1)
@@ -189,28 +207,17 @@ local function getVehicleCargoData()
             for _, vehicle in ipairs(vehiclesFolder:GetChildren()) do
                 if vehicle:IsA("Model") then
                     
-                    -- ==========================================
-                    -- 1. DIRECT CARGO VOLUME COUNTING (Exact Path)
-                    -- ==========================================
                     local cargoVolume = vehicle:FindFirstChild("CargoVolume")
-                    
                     if cargoVolume then
-                        -- Literally just count the number of ores inside the folder
                         local currentCount = #cargoVolume:GetChildren()
-                        
                         cargoText = tostring(currentCount) .. " / " .. tostring(VEHICLE_CAPACITY)
                         
                         if currentCount >= VEHICLE_CAPACITY then
                             isFull = true
                         end
-                        
-                        -- We found exactly what we needed, stop checking!
                         return 
                     end
                     
-                    -- ==========================================
-                    -- 2. ATTRIBUTES FALLBACK (Just in case)
-                    -- ==========================================
                     local current = vehicle:GetAttribute("StoredOres") or vehicle:GetAttribute("Cargo") or vehicle:GetAttribute("OreCount")
                     local maxCap = vehicle:GetAttribute("Capacity") or vehicle:GetAttribute("MaxCapacity")
                     
@@ -239,25 +246,24 @@ local function applyDrillSize()
     local multi = drillMultipliers[currentDrillIndex]
     
     pcall(function()
-        -- Directly target the exact path to the DrillZone
-        local drillZone = workspace.Vehicles.ExaDrill.Body.DrillZone
+        -- Safely step through the hierarchy so it doesn't break if the drill despawns
+        local vehicles = workspace:FindFirstChild("Vehicles")
+        local exaDrill = vehicles and vehicles:FindFirstChild("ExaDrill")
+        local body = exaDrill and exaDrill:FindFirstChild("Body")
+        local drillZone = body and body:FindFirstChild("DrillZone")
         
         if drillZone and drillZone:IsA("BasePart") then
-            -- Save the original size securely the first time we touch it
             if not drillZone:GetAttribute("OriginalSize") then
                 drillZone:SetAttribute("OriginalSize", drillZone.Size)
             end
             
             local origSize = drillZone:GetAttribute("OriginalSize")
-            
-            -- Adjust the Size property directly
             drillZone.Size = origSize * multi
             
-            -- Make the Hitbox slightly transparent so you aren't blinded by a massive invisible block
             if multi > 1 then
                 drillZone.Transparency = 0.5
             else
-                drillZone.Transparency = 1 -- Hide it back when it's 1x
+                drillZone.Transparency = 1
             end
         end
     end)
@@ -271,8 +277,6 @@ btnDrillSize.MouseButton1Click:Connect(function()
     
     local multi = drillMultipliers[currentDrillIndex]
     btnDrillSize.Text = "Drill Hitbox: " .. multi .. "x"
-    
-    -- Apply immediately upon clicking
     applyDrillSize()
 end)
 
@@ -284,8 +288,12 @@ local currentSpeedIndex = 1
 
 local function applyWalkSpeed()
     local speed = walkSpeeds[currentSpeedIndex]
-    if player.Character and player.Character:FindFirstChild("Humanoid") then
-        player.Character.Humanoid.WalkSpeed = speed
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChild("Humanoid")
+        if hum then
+            hum.WalkSpeed = speed
+        end
     end
 end
 
@@ -300,7 +308,6 @@ btnWalkSpeed.MouseButton1Click:Connect(function()
     applyWalkSpeed()
 end)
 
--- Force apply walkspeed periodically to prevent the game from resetting it
 task.spawn(function()
     while task.wait(0.5) do
         if currentSpeedIndex > 1 then
@@ -321,7 +328,10 @@ local function unloadFunc()
     pressKey(Enum.KeyCode.E, 0.1)
     safeWait(0.28)
     
-    wp2 = hrp.CFrame
+    local hrp = getHRP()
+    if hrp then
+        wp2 = hrp.CFrame
+    end
     
     for i = 1, 4 do
         teleport(wp1)
@@ -355,10 +365,7 @@ local function mineFunc()
     holdKey(Enum.KeyCode.W)
     
     while isRunning do
-        -- Constantly fetch the live state every 0.5 seconds
         local isFull, cargoText = getVehicleCargoData()
-        
-        -- Always ensure the drill zone stays modified even if the game tries to reset the model!
         applyDrillSize()
         
         if cargoText then
@@ -419,9 +426,16 @@ btnMinimize.MouseButton1Click:Connect(function()
 end)
 
 btnSetWp1.MouseButton1Click:Connect(function()
-    wp1 = hrp.CFrame
-    btnSetWp1.Text = "WP 1 Set!"
-    btnSetWp1.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    local hrp = getHRP()
+    if hrp then
+        wp1 = hrp.CFrame
+        btnSetWp1.Text = "WP 1 Set!"
+        btnSetWp1.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    else
+        btnSetWp1.Text = "Spawn First!"
+        task.wait(1)
+        btnSetWp1.Text = "Set WP 1"
+    end
 end)
 
 local function startScript()
@@ -478,10 +492,8 @@ btnForceUnload.MouseButton1Click:Connect(function()
 end)
 
 btnTpPlot.MouseButton1Click:Connect(function()
-    -- 1. Try to get plot ID from Player Attributes
     local plotId = player:GetAttribute("Plot") or player:GetAttribute("PlotID") or player:GetAttribute("PlotId") or player:GetAttribute("plot")
     
-    -- 2. Try to get plot ID from internal StringValue/IntValue properties
     if not plotId then
         local plotVal = player:FindFirstChild("Plot") or player:FindFirstChild("PlotID") or player:FindFirstChild("PlotId")
         if plotVal then
@@ -493,12 +505,10 @@ btnTpPlot.MouseButton1Click:Connect(function()
     local targetPlot = nil
 
     if plotsFolder then
-        -- Attempt to find the plot numerically/by string (e.g. workspace.Plots["4"])
         if plotId then
             targetPlot = plotsFolder:FindFirstChild(tostring(plotId))
         end
 
-        -- 3. Fallback: Iterate through all plots and check for Ownership attributes
         if not targetPlot then
             for _, plot in ipairs(plotsFolder:GetChildren()) do
                 local ownerAttr = plot:GetAttribute("Owner") or plot:GetAttribute("OwnerId") or plot:GetAttribute("Player")
@@ -516,7 +526,6 @@ btnTpPlot.MouseButton1Click:Connect(function()
         end
 
         if targetPlot then
-            -- Teleport securely using GetPivot() to grab the plot's center CFrame, adding +10 on the Y axis to avoid clipping
             local targetCFrame = targetPlot:GetPivot()
             if targetCFrame then
                 teleport(targetCFrame + Vector3.new(0, 10, 0))
@@ -550,4 +559,3 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         end
     end
 end)
-```
