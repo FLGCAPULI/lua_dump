@@ -163,10 +163,9 @@ lblCountdown.TextColor3 = Theme.Text
 lblCountdown.Font = Enum.Font.Code
 lblCountdown.BackgroundTransparency = 1
 
-local btnSetWp1 = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 60), "Set WP 1")
-local btnStart = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 95), "Start")
-local btnPause = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 130), "Pause")
-local btnForceUnload = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 165), "Force Unload")
+local btnStart = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 60), "Start")
+local btnPause = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 95), "Pause")
+local btnForceUnload = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 130), "Force Unload")
 
 -- === MODS TAB ELEMENTS ===
 local lblDrill = Instance.new("TextLabel", tabMods)
@@ -278,6 +277,38 @@ local function safeWait(waitTime)
         task.wait(0.1)
         elapsed = elapsed + 0.1
     end
+end
+
+-- DYNAMIC UNLOADER SCANNER
+local function getUnloaderCFrame()
+    pcall(function()
+        local fgi = workspace:FindFirstChild("FactoryGridItemsClient")
+        if not fgi then return end
+        
+        local pFolder1 = fgi:FindFirstChild(player.Name)
+        if not pFolder1 then return end
+        
+        local pFolder2 = pFolder1:FindFirstChild(player.Name)
+        if not pFolder2 then return end
+        
+        for _, child in ipairs(pFolder2:GetChildren()) do
+            -- Look for any model whose name contains "Unloader" (e.g., Unloader5)
+            if string.find(string.lower(child.Name), "unloader") then
+                -- Attempt to find the specific ProximityPrompt part to teleport accurately
+                local prompt = child:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then
+                    -- Teleport to the prompt part, lifted up slightly to prevent clipping
+                    wp1 = prompt.Parent.CFrame + Vector3.new(0, 3, 0)
+                    return
+                end
+                
+                -- Fallback: Use the model's center pivot
+                wp1 = child:GetPivot() + Vector3.new(0, 3, 0)
+                return
+            end
+        end
+    end)
+    return wp1
 end
 
 -- TARGETED VEHICLE SCANNER
@@ -478,22 +509,13 @@ btnMinimize.MouseButton1Click:Connect(function()
     end
 end)
 
-btnSetWp1.MouseButton1Click:Connect(function()
-    local hrp = getHRP()
-    if hrp then
-        wp1 = hrp.CFrame
-        btnSetWp1.Text = "WP 1 Set!"
-    else
-        btnSetWp1.Text = "Spawn First!"
-        task.wait(1)
-        btnSetWp1.Text = "Set WP 1"
-    end
-end)
-
 local function startScript()
+    -- Automatically grab the unloader location before starting
+    getUnloaderCFrame()
+    
     if not wp1 then
-        btnStart.Text = "Set WP 1 First!"
-        task.wait(1)
+        btnStart.Text = "Unloader Not Found!"
+        task.wait(1.5)
         if not isRunning then btnStart.Text = "Start" end
         return
     end
@@ -524,9 +546,10 @@ btnForceUnload.MouseButton1Click:Connect(function()
         forceUnloadTrigger = true
         lblStatus.Text = "Status: Forcing Unload..."
     else
+        getUnloaderCFrame()
         if not wp1 then
-            btnForceUnload.Text = "Set WP1 First!"
-            task.wait(1)
+            btnForceUnload.Text = "Unloader Not Found!"
+            task.wait(1.5)
             btnForceUnload.Text = "Force Unload"
             return
         end
