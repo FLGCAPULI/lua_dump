@@ -27,6 +27,7 @@ local forceUnloadTrigger = false
 
 -- CONFIGURATION
 local VEHICLE_CAPACITY = 120 
+local MAX_CARGO_CHILDREN = 240 -- The exact number of instances in CargoVolume when full (120 ores * 2 parts/welds)
 
 -- ==========================================
 -- 1. GUI Setup (Executor Safe)
@@ -216,10 +217,16 @@ local function getVehicleCargoData()
                     
                     local cargoVolume = vehicle:FindFirstChild("CargoVolume")
                     if cargoVolume then
+                        -- Count literal number of items (ores, welds, meshes) in the folder
                         local currentCount = #cargoVolume:GetChildren()
-                        cargoText = tostring(currentCount) .. " / " .. tostring(VEHICLE_CAPACITY)
                         
-                        if currentCount >= VEHICLE_CAPACITY then
+                        -- Estimate actual ore count for display (current parts / 2)
+                        local estimatedOres = math.floor(currentCount / (MAX_CARGO_CHILDREN / VEHICLE_CAPACITY))
+                        if estimatedOres > VEHICLE_CAPACITY then estimatedOres = VEHICLE_CAPACITY end
+                        
+                        cargoText = tostring(estimatedOres) .. " / " .. tostring(VEHICLE_CAPACITY) .. " [Raw: " .. tostring(currentCount) .. "]"
+                        
+                        if currentCount >= MAX_CARGO_CHILDREN then
                             isFull = true
                         end
                         return 
