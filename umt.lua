@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser")
 
 -- Wait securely for the player to exist (fixes auto-execute bugs)
 local player = Players.LocalPlayer
@@ -25,131 +26,206 @@ local loopActive = false
 local isPaused = false
 local forceUnloadTrigger = false
 
+-- ANTI-AFK (On by default)
+player.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
 -- CONFIGURATION
 local VEHICLE_CAPACITY = 120 
 local MAX_CARGO_CHILDREN = 240 -- The exact number of instances in CargoVolume when full (120 ores * 2 parts/welds)
 
 -- ==========================================
--- 1. GUI Setup (Executor Safe)
+-- 1. GUI Setup (Executor Safe & Redesigned)
 -- ==========================================
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "AutoFarmGUI"
 screenGui.ResetOnSpawn = false
 
--- Safely attempt to parent to CoreGui without triggering security exceptions at the top level
-local success = pcall(function()
-    screenGui.Parent = game:GetService("CoreGui")
-end)
-if not success then 
-    screenGui.Parent = player:WaitForChild("PlayerGui") 
-end
+local success = pcall(function() screenGui.Parent = game:GetService("CoreGui") end)
+if not success then screenGui.Parent = player:WaitForChild("PlayerGui") end
 
+-- Shared Theme Colors
+local Theme = {
+    BG = Color3.fromRGB(30, 30, 30),
+    TabBG = Color3.fromRGB(20, 20, 20),
+    Button = Color3.fromRGB(45, 45, 45),
+    ButtonHover = Color3.fromRGB(60, 60, 60),
+    Text = Color3.fromRGB(220, 220, 220),
+    Active = Color3.fromRGB(80, 80, 80)
+}
+
+-- Frame
 local frame = Instance.new("Frame", screenGui)
-frame.Size = UDim2.new(0, 200, 0, 450) -- Increased height to fit Explosion button
+frame.Size = UDim2.new(0, 220, 0, 300)
 frame.Position = UDim2.new(0, 10, 0, 10)
-frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+frame.BackgroundColor3 = Theme.BG
 frame.ClipsDescendants = true
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
 
+-- Topbar
 local topbar = Instance.new("Frame", frame)
 topbar.Size = UDim2.new(1, 0, 0, 30)
-topbar.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+topbar.BackgroundColor3 = Theme.TabBG
+topbar.BorderSizePixel = 0
 
 local title = Instance.new("TextLabel", topbar)
 title.Size = UDim2.new(0.8, 0, 1, 0)
 title.Position = UDim2.new(0.05, 0, 0, 0)
 title.Text = "Auto Farm Script"
 title.TextXAlignment = Enum.TextXAlignment.Left
-title.TextColor3 = Color3.new(1, 1, 1)
+title.TextColor3 = Theme.Text
+title.Font = Enum.Font.Code
 title.BackgroundTransparency = 1
 
 local btnMinimize = Instance.new("TextButton", topbar)
 btnMinimize.Size = UDim2.new(0.2, 0, 1, 0)
 btnMinimize.Position = UDim2.new(0.8, 0, 0, 0)
 btnMinimize.Text = "-"
-btnMinimize.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-btnMinimize.TextColor3 = Color3.new(1, 1, 1)
+btnMinimize.BackgroundColor3 = Theme.TabBG
+btnMinimize.TextColor3 = Theme.Text
+btnMinimize.Font = Enum.Font.Code
+btnMinimize.BorderSizePixel = 0
 
+-- Tab Bar
+local tabBar = Instance.new("Frame", frame)
+tabBar.Size = UDim2.new(1, 0, 0, 25)
+tabBar.Position = UDim2.new(0, 0, 0, 30)
+tabBar.BackgroundColor3 = Theme.TabBG
+tabBar.BorderSizePixel = 0
+
+local function createTabBtn(text, pos)
+    local btn = Instance.new("TextButton", tabBar)
+    btn.Size = UDim2.new(0.333, 0, 1, 0)
+    btn.Position = pos
+    btn.Text = text
+    btn.BackgroundColor3 = Theme.TabBG
+    btn.TextColor3 = Theme.Text
+    btn.Font = Enum.Font.Code
+    btn.BorderSizePixel = 0
+    return btn
+end
+
+local btnTabMain = createTabBtn("Main", UDim2.new(0, 0, 0, 0))
+local btnTabMods = createTabBtn("Mods", UDim2.new(0.333, 0, 0, 0))
+local btnTabMisc = createTabBtn("Misc", UDim2.new(0.666, 0, 0, 0))
+btnTabMain.BackgroundColor3 = Theme.Active -- Default active
+
+-- Content Container
 local contentFrame = Instance.new("Frame", frame)
-contentFrame.Size = UDim2.new(1, 0, 1, -30)
-contentFrame.Position = UDim2.new(0, 0, 0, 30)
+contentFrame.Size = UDim2.new(1, 0, 1, -55)
+contentFrame.Position = UDim2.new(0, 0, 0, 55)
 contentFrame.BackgroundTransparency = 1
 
-local lblStatus = Instance.new("TextLabel", contentFrame)
+local tabMain = Instance.new("Frame", contentFrame)
+tabMain.Size = UDim2.new(1, 0, 1, 0)
+tabMain.BackgroundTransparency = 1
+
+local tabMods = Instance.new("Frame", contentFrame)
+tabMods.Size = UDim2.new(1, 0, 1, 0)
+tabMods.BackgroundTransparency = 1
+tabMods.Visible = false
+
+local tabMisc = Instance.new("Frame", contentFrame)
+tabMisc.Size = UDim2.new(1, 0, 1, 0)
+tabMisc.BackgroundTransparency = 1
+tabMisc.Visible = false
+
+-- Helper to create rounded buttons/inputs
+local function createUIElement(className, parent, pos, text)
+    local el = Instance.new(className, parent)
+    el.Size = UDim2.new(0.9, 0, 0, 28)
+    el.Position = pos
+    el.Text = text
+    el.BackgroundColor3 = Theme.Button
+    el.TextColor3 = Theme.Text
+    el.Font = Enum.Font.Code
+    el.TextSize = 13
+    Instance.new("UICorner", el).CornerRadius = UDim.new(0, 6)
+    return el
+end
+
+-- === MAIN TAB ELEMENTS ===
+local lblStatus = Instance.new("TextLabel", tabMain)
 lblStatus.Size = UDim2.new(0.9, 0, 0, 20)
 lblStatus.Position = UDim2.new(0.05, 0, 0, 10)
 lblStatus.Text = "Status: Idle"
-lblStatus.TextColor3 = Color3.fromRGB(200, 200, 200)
+lblStatus.TextColor3 = Theme.Text
+lblStatus.Font = Enum.Font.Code
 lblStatus.BackgroundTransparency = 1
 
-local lblCountdown = Instance.new("TextLabel", contentFrame)
+local lblCountdown = Instance.new("TextLabel", tabMain)
 lblCountdown.Size = UDim2.new(0.9, 0, 0, 20)
 lblCountdown.Position = UDim2.new(0.05, 0, 0, 30)
 lblCountdown.Text = "Time: 0s"
-lblCountdown.TextColor3 = Color3.fromRGB(200, 200, 200)
+lblCountdown.TextColor3 = Theme.Text
+lblCountdown.Font = Enum.Font.Code
 lblCountdown.BackgroundTransparency = 1
 
-local btnSetWp1 = Instance.new("TextButton", contentFrame)
-btnSetWp1.Size = UDim2.new(0.9, 0, 0, 30)
-btnSetWp1.Position = UDim2.new(0.05, 0, 0, 60)
-btnSetWp1.Text = "Set WP 1"
-btnSetWp1.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-btnSetWp1.TextColor3 = Color3.new(1, 1, 1)
+local btnSetWp1 = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 60), "Set WP 1")
+local btnStart = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 95), "Start")
+local btnPause = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 130), "Pause")
+local btnForceUnload = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 165), "Force Unload")
 
-local btnStart = Instance.new("TextButton", contentFrame)
-btnStart.Size = UDim2.new(0.9, 0, 0, 30)
-btnStart.Position = UDim2.new(0.05, 0, 0, 100)
-btnStart.Text = "Start"
-btnStart.BackgroundColor3 = Color3.fromRGB(40, 150, 40)
-btnStart.TextColor3 = Color3.new(1, 1, 1)
+-- === MODS TAB ELEMENTS ===
+local lblDrill = Instance.new("TextLabel", tabMods)
+lblDrill.Size = UDim2.new(0.9, 0, 0, 20)
+lblDrill.Position = UDim2.new(0.05, 0, 0, 10)
+lblDrill.Text = "Drill Multiplier (e.g. 5):"
+lblDrill.TextColor3 = Theme.Text
+lblDrill.Font = Enum.Font.Code
+lblDrill.BackgroundTransparency = 1
+lblDrill.TextXAlignment = Enum.TextXAlignment.Left
 
-local btnPause = Instance.new("TextButton", contentFrame)
-btnPause.Size = UDim2.new(0.9, 0, 0, 30)
-btnPause.Position = UDim2.new(0.05, 0, 0, 140)
-btnPause.Text = "Pause"
-btnPause.BackgroundColor3 = Color3.fromRGB(150, 100, 20)
-btnPause.TextColor3 = Color3.new(1, 1, 1)
+local txtDrillSize = createUIElement("TextBox", tabMods, UDim2.new(0.05, 0, 0, 30), "1")
+txtDrillSize.PlaceholderText = "1"
+txtDrillSize.ClearTextOnFocus = false
 
-local btnForceUnload = Instance.new("TextButton", contentFrame)
-btnForceUnload.Size = UDim2.new(0.9, 0, 0, 30)
-btnForceUnload.Position = UDim2.new(0.05, 0, 0, 180)
-btnForceUnload.Text = "Force Unload"
-btnForceUnload.BackgroundColor3 = Color3.fromRGB(120, 60, 150)
-btnForceUnload.TextColor3 = Color3.new(1, 1, 1)
+local lblSpeed = Instance.new("TextLabel", tabMods)
+lblSpeed.Size = UDim2.new(0.9, 0, 0, 20)
+lblSpeed.Position = UDim2.new(0.05, 0, 0, 70)
+lblSpeed.Text = "WalkSpeed (e.g. 64):"
+lblSpeed.TextColor3 = Theme.Text
+lblSpeed.Font = Enum.Font.Code
+lblSpeed.BackgroundTransparency = 1
+lblSpeed.TextXAlignment = Enum.TextXAlignment.Left
 
-local btnDrillSize = Instance.new("TextButton", contentFrame)
-btnDrillSize.Size = UDim2.new(0.9, 0, 0, 30)
-btnDrillSize.Position = UDim2.new(0.05, 0, 0, 220)
-btnDrillSize.Text = "Drill Hitbox: 1x"
-btnDrillSize.BackgroundColor3 = Color3.fromRGB(60, 100, 150)
-btnDrillSize.TextColor3 = Color3.new(1, 1, 1)
+local txtWalkSpeed = createUIElement("TextBox", tabMods, UDim2.new(0.05, 0, 0, 90), "16")
+txtWalkSpeed.PlaceholderText = "16"
+txtWalkSpeed.ClearTextOnFocus = false
 
-local btnWalkSpeed = Instance.new("TextButton", contentFrame)
-btnWalkSpeed.Size = UDim2.new(0.9, 0, 0, 30)
-btnWalkSpeed.Position = UDim2.new(0.05, 0, 0, 260)
-btnWalkSpeed.Text = "WalkSpeed: 16"
-btnWalkSpeed.BackgroundColor3 = Color3.fromRGB(150, 80, 40)
-btnWalkSpeed.TextColor3 = Color3.new(1, 1, 1)
+-- === MISC TAB ELEMENTS ===
+local btnTpPlot = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 15), "TP to Plot")
+local btnExplode = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 50), "Spawn Explosion")
+local btnAntiLag = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 85), "Anti-Lag (Boost FPS)")
+local btnTerminate = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 200), "Terminate")
 
-local btnTpPlot = Instance.new("TextButton", contentFrame)
-btnTpPlot.Size = UDim2.new(0.9, 0, 0, 30)
-btnTpPlot.Position = UDim2.new(0.05, 0, 0, 300)
-btnTpPlot.Text = "TP to Plot"
-btnTpPlot.BackgroundColor3 = Color3.fromRGB(80, 150, 80)
-btnTpPlot.TextColor3 = Color3.new(1, 1, 1)
+-- Tab Switching Logic
+local function switchTab(tabName)
+    btnTabMain.BackgroundColor3 = Theme.TabBG
+    btnTabMods.BackgroundColor3 = Theme.TabBG
+    btnTabMisc.BackgroundColor3 = Theme.TabBG
+    
+    tabMain.Visible = false
+    tabMods.Visible = false
+    tabMisc.Visible = false
+    
+    if tabName == "Main" then
+        btnTabMain.BackgroundColor3 = Theme.Active
+        tabMain.Visible = true
+    elseif tabName == "Mods" then
+        btnTabMods.BackgroundColor3 = Theme.Active
+        tabMods.Visible = true
+    elseif tabName == "Misc" then
+        btnTabMisc.BackgroundColor3 = Theme.Active
+        tabMisc.Visible = true
+    end
+end
 
-local btnExplode = Instance.new("TextButton", contentFrame)
-btnExplode.Size = UDim2.new(0.9, 0, 0, 30)
-btnExplode.Position = UDim2.new(0.05, 0, 0, 340)
-btnExplode.Text = "Spawn Explosion"
-btnExplode.BackgroundColor3 = Color3.fromRGB(150, 80, 20)
-btnExplode.TextColor3 = Color3.new(1, 1, 1)
-
-local btnTerminate = Instance.new("TextButton", contentFrame)
-btnTerminate.Size = UDim2.new(0.9, 0, 0, 30)
-btnTerminate.Position = UDim2.new(0.05, 0, 0, 380)
-btnTerminate.Text = "Terminate"
-btnTerminate.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
-btnTerminate.TextColor3 = Color3.new(1, 1, 1)
+btnTabMain.MouseButton1Click:Connect(function() switchTab("Main") end)
+btnTabMods.MouseButton1Click:Connect(function() switchTab("Mods") end)
+btnTabMisc.MouseButton1Click:Connect(function() switchTab("Misc") end)
 
 -- ==========================================
 -- 2. Helper Functions & Scanners
@@ -217,18 +293,12 @@ local function getVehicleCargoData()
                     
                     local cargoVolume = vehicle:FindFirstChild("CargoVolume")
                     if cargoVolume then
-                        -- Count literal number of items (ores, welds, meshes) in the folder
                         local currentCount = #cargoVolume:GetChildren()
-                        
-                        -- Estimate actual ore count for display (current parts / 2)
                         local estimatedOres = math.floor(currentCount / (MAX_CARGO_CHILDREN / VEHICLE_CAPACITY))
                         if estimatedOres > VEHICLE_CAPACITY then estimatedOres = VEHICLE_CAPACITY end
                         
                         cargoText = tostring(estimatedOres) .. " / " .. tostring(VEHICLE_CAPACITY) .. " [Raw: " .. tostring(currentCount) .. "]"
-                        
-                        if currentCount >= MAX_CARGO_CHILDREN then
-                            isFull = true
-                        end
+                        if currentCount >= MAX_CARGO_CHILDREN then isFull = true end
                         return 
                     end
                     
@@ -237,9 +307,7 @@ local function getVehicleCargoData()
                     
                     if current and maxCap and tonumber(maxCap) == VEHICLE_CAPACITY then
                         cargoText = tostring(current) .. " / " .. tostring(maxCap)
-                        if tonumber(current) >= tonumber(maxCap) then
-                            isFull = true
-                        end
+                        if tonumber(current) >= tonumber(maxCap) then isFull = true end
                         return
                     end
                 end
@@ -251,16 +319,12 @@ local function getVehicleCargoData()
 end
 
 -- ==========================================
--- DRILL ZONE MODIFIER LOGIC
+-- MODIFIERS (Read from TextBoxes)
 -- ==========================================
-local drillMultipliers = {1, 3, 5, 10, 20}
-local currentDrillIndex = 1
-
 local function applyDrillSize()
-    local multi = drillMultipliers[currentDrillIndex]
+    local multi = tonumber(txtDrillSize.Text) or 1
     
     pcall(function()
-        -- Safely step through the hierarchy so it doesn't break if the drill despawns
         local vehicles = workspace:FindFirstChild("Vehicles")
         local exaDrill = vehicles and vehicles:FindFirstChild("ExaDrill")
         local body = exaDrill and exaDrill:FindFirstChild("Body")
@@ -283,25 +347,8 @@ local function applyDrillSize()
     end)
 end
 
-btnDrillSize.MouseButton1Click:Connect(function()
-    currentDrillIndex = currentDrillIndex + 1
-    if currentDrillIndex > #drillMultipliers then
-        currentDrillIndex = 1
-    end
-    
-    local multi = drillMultipliers[currentDrillIndex]
-    btnDrillSize.Text = "Drill Hitbox: " .. multi .. "x"
-    applyDrillSize()
-end)
-
--- ==========================================
--- WALK SPEED MODIFIER LOGIC
--- ==========================================
-local walkSpeeds = {16, 32, 64, 100}
-local currentSpeedIndex = 1
-
 local function applyWalkSpeed()
-    local speed = walkSpeeds[currentSpeedIndex]
+    local speed = tonumber(txtWalkSpeed.Text) or 16
     local char = player.Character
     if char then
         local hum = char:FindFirstChild("Humanoid")
@@ -311,20 +358,13 @@ local function applyWalkSpeed()
     end
 end
 
-btnWalkSpeed.MouseButton1Click:Connect(function()
-    currentSpeedIndex = currentSpeedIndex + 1
-    if currentSpeedIndex > #walkSpeeds then
-        currentSpeedIndex = 1
-    end
-    
-    local speed = walkSpeeds[currentSpeedIndex]
-    btnWalkSpeed.Text = "WalkSpeed: " .. speed
-    applyWalkSpeed()
-end)
-
+-- Apply modifications periodically
 task.spawn(function()
     while task.wait(0.5) do
-        if currentSpeedIndex > 1 then
+        applyDrillSize()
+        
+        local speed = tonumber(txtWalkSpeed.Text)
+        if speed and speed ~= 16 then
             applyWalkSpeed()
         end
     end
@@ -343,9 +383,7 @@ local function unloadFunc()
     safeWait(0.28)
     
     local hrp = getHRP()
-    if hrp then
-        wp2 = hrp.CFrame
-    end
+    if hrp then wp2 = hrp.CFrame end
     
     for i = 1, 4 do
         teleport(wp1)
@@ -380,7 +418,6 @@ local function mineFunc()
     
     while isRunning do
         local isFull, cargoText = getVehicleCargoData()
-        applyDrillSize()
         
         if cargoText then
             lblCountdown.Text = "Cargo: " .. cargoText
@@ -429,12 +466,14 @@ local minimized = false
 btnMinimize.MouseButton1Click:Connect(function()
     minimized = not minimized
     if minimized then
-        frame.Size = UDim2.new(0, 200, 0, 30)
+        frame.Size = UDim2.new(0, 220, 0, 30)
         contentFrame.Visible = false
+        tabBar.Visible = false
         btnMinimize.Text = "+"
     else
-        frame.Size = UDim2.new(0, 200, 0, 450)
+        frame.Size = UDim2.new(0, 220, 0, 300)
         contentFrame.Visible = true
+        tabBar.Visible = true
         btnMinimize.Text = "-"
     end
 end)
@@ -444,7 +483,6 @@ btnSetWp1.MouseButton1Click:Connect(function()
     if hrp then
         wp1 = hrp.CFrame
         btnSetWp1.Text = "WP 1 Set!"
-        btnSetWp1.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
     else
         btnSetWp1.Text = "Spawn First!"
         task.wait(1)
@@ -461,7 +499,6 @@ local function startScript()
     end
     
     btnStart.Text = "Running..."
-    btnStart.BackgroundColor3 = Color3.fromRGB(30, 120, 30)
     
     if not isRunning then
         isRunning = true
@@ -477,10 +514,8 @@ btnPause.MouseButton1Click:Connect(function()
     isPaused = not isPaused
     if isPaused then
         btnPause.Text = "Resume"
-        btnPause.BackgroundColor3 = Color3.fromRGB(150, 150, 40)
     else
         btnPause.Text = "Pause"
-        btnPause.BackgroundColor3 = Color3.fromRGB(150, 100, 20)
     end
 end)
 
@@ -510,18 +545,14 @@ btnTpPlot.MouseButton1Click:Connect(function()
     
     if not plotId then
         local plotVal = player:FindFirstChild("Plot") or player:FindFirstChild("PlotID") or player:FindFirstChild("PlotId")
-        if plotVal then
-            plotId = plotVal.Value
-        end
+        if plotVal then plotId = plotVal.Value end
     end
 
     local plotsFolder = workspace:FindFirstChild("Plots")
     local targetPlot = nil
 
     if plotsFolder then
-        if plotId then
-            targetPlot = plotsFolder:FindFirstChild(tostring(plotId))
-        end
+        if plotId then targetPlot = plotsFolder:FindFirstChild(tostring(plotId)) end
 
         if not targetPlot then
             for _, plot in ipairs(plotsFolder:GetChildren()) do
@@ -569,6 +600,37 @@ btnExplode.MouseButton1Click:Connect(function()
     else
         lblStatus.Text = "Status: Spawn First!"
     end
+end)
+
+btnAntiLag.MouseButton1Click:Connect(function()
+    lblStatus.Text = "Status: Applying Anti-Lag..."
+    task.spawn(function()
+        local Lighting = game:GetService("Lighting")
+        local Terrain = workspace:FindFirstChildOfClass('Terrain')
+        
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 9e9
+        Lighting.ShadowSoftness = 0
+        
+        if Terrain then
+            Terrain.WaterWaveSize = 0
+            Terrain.WaterWaveSpeed = 0
+            Terrain.WaterReflectance = 0
+            Terrain.WaterTransparency = 0
+        end
+        
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                obj.Material = Enum.Material.SmoothPlastic
+                obj.Reflectance = 0
+            elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                obj.Transparency = 1
+            elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") then
+                obj.Lifetime = NumberRange.new(0)
+            end
+        end
+        lblStatus.Text = "Status: Anti-Lag Applied!"
+    end)
 end)
 
 local function terminateScript()
