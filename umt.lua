@@ -25,6 +25,7 @@ local isRunning = false
 local loopActive = false
 local isPaused = false
 local forceUnloadTrigger = false
+local targetedDrill = nil
 
 -- ANTI-AFK (On by default)
 player.Idled:Connect(function()
@@ -58,7 +59,7 @@ local Theme = {
 
 -- Frame
 local frame = Instance.new("Frame", screenGui)
-frame.Size = UDim2.new(0, 220, 0, 300)
+frame.Size = UDim2.new(0, 280, 0, 400)
 frame.Position = UDim2.new(0, 10, 0, 10)
 frame.BackgroundColor3 = Theme.BG
 frame.ClipsDescendants = true
@@ -97,37 +98,52 @@ tabBar.BorderSizePixel = 0
 
 local function createTabBtn(text, pos)
     local btn = Instance.new("TextButton", tabBar)
-    btn.Size = UDim2.new(0.333, 0, 1, 0)
+    btn.Size = UDim2.new(0.25, 0, 1, 0)
     btn.Position = pos
     btn.Text = text
     btn.BackgroundColor3 = Theme.TabBG
     btn.TextColor3 = Theme.Text
     btn.Font = Enum.Font.Code
     btn.BorderSizePixel = 0
+    btn.TextSize = 11
     return btn
 end
 
 local btnTabMain = createTabBtn("Main", UDim2.new(0, 0, 0, 0))
-local btnTabMods = createTabBtn("Mods", UDim2.new(0.333, 0, 0, 0))
-local btnTabMisc = createTabBtn("Misc", UDim2.new(0.666, 0, 0, 0))
+local btnTabDrill = createTabBtn("Drill", UDim2.new(0.25, 0, 0, 0))
+local btnTabMods = createTabBtn("Mods", UDim2.new(0.5, 0, 0, 0))
+local btnTabMisc = createTabBtn("Misc", UDim2.new(0.75, 0, 0, 0))
 btnTabMain.BackgroundColor3 = Theme.Active -- Default active
 
--- Content Container
+-- Content Container with Scroll
 local contentFrame = Instance.new("Frame", frame)
 contentFrame.Size = UDim2.new(1, 0, 1, -55)
 contentFrame.Position = UDim2.new(0, 0, 0, 55)
 contentFrame.BackgroundTransparency = 1
+contentFrame.ClipsDescendants = true
 
-local tabMain = Instance.new("Frame", contentFrame)
+local scrolling = Instance.new("ScrollingFrame", contentFrame)
+scrolling.Size = UDim2.new(1, 0, 1, 0)
+scrolling.BackgroundTransparency = 1
+scrolling.BorderSizePixel = 0
+scrolling.CanvasSize = UDim2.new(0, 0, 0, 800)
+scrolling.ScrollBarThickness = 6
+
+local tabMain = Instance.new("Frame", scrolling)
 tabMain.Size = UDim2.new(1, 0, 1, 0)
 tabMain.BackgroundTransparency = 1
 
-local tabMods = Instance.new("Frame", contentFrame)
+local tabDrill = Instance.new("Frame", scrolling)
+tabDrill.Size = UDim2.new(1, 0, 1, 0)
+tabDrill.BackgroundTransparency = 1
+tabDrill.Visible = false
+
+local tabMods = Instance.new("Frame", scrolling)
 tabMods.Size = UDim2.new(1, 0, 1, 0)
 tabMods.BackgroundTransparency = 1
 tabMods.Visible = false
 
-local tabMisc = Instance.new("Frame", contentFrame)
+local tabMisc = Instance.new("Frame", scrolling)
 tabMisc.Size = UDim2.new(1, 0, 1, 0)
 tabMisc.BackgroundTransparency = 1
 tabMisc.Visible = false
@@ -141,7 +157,7 @@ local function createUIElement(className, parent, pos, text)
     el.BackgroundColor3 = Theme.Button
     el.TextColor3 = Theme.Text
     el.Font = Enum.Font.Code
-    el.TextSize = 13
+    el.TextSize = 12
     Instance.new("UICorner", el).CornerRadius = UDim.new(0, 6)
     return el
 end
@@ -154,6 +170,7 @@ lblStatus.Text = "Status: Idle"
 lblStatus.TextColor3 = Theme.Text
 lblStatus.Font = Enum.Font.Code
 lblStatus.BackgroundTransparency = 1
+lblStatus.TextSize = 12
 
 local lblCountdown = Instance.new("TextLabel", tabMain)
 lblCountdown.Size = UDim2.new(0.9, 0, 0, 20)
@@ -162,10 +179,90 @@ lblCountdown.Text = "Time: 0s"
 lblCountdown.TextColor3 = Theme.Text
 lblCountdown.Font = Enum.Font.Code
 lblCountdown.BackgroundTransparency = 1
+lblCountdown.TextSize = 12
 
 local btnStart = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 60), "Start")
 local btnPause = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 95), "Pause")
 local btnForceUnload = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 130), "Force Unload")
+
+-- === DRILL TAB ELEMENTS (NEW) ===
+local lblDrillTarget = Instance.new("TextLabel", tabDrill)
+lblDrillTarget.Size = UDim2.new(0.9, 0, 0, 18)
+lblDrillTarget.Position = UDim2.new(0.05, 0, 0, 10)
+lblDrillTarget.Text = "Target Drill:"
+lblDrillTarget.TextColor3 = Color3.fromRGB(255, 200, 100)
+lblDrillTarget.BackgroundTransparency = 1
+lblDrillTarget.TextXAlignment = Enum.TextXAlignment.Left
+lblDrillTarget.Font = Enum.Font.Code
+lblDrillTarget.TextSize = 11
+
+local lblTargetDrill = Instance.new("TextLabel", tabDrill)
+lblTargetDrill.Size = UDim2.new(0.9, 0, 0, 18)
+lblTargetDrill.Position = UDim2.new(0.05, 0, 0, 28)
+lblTargetDrill.Text = "None"
+lblTargetDrill.TextColor3 = Color3.fromRGB(100, 200, 100)
+lblTargetDrill.BackgroundTransparency = 1
+lblTargetDrill.TextXAlignment = Enum.TextXAlignment.Left
+lblTargetDrill.Font = Enum.Font.Code
+lblTargetDrill.TextSize = 12
+
+local btnRefreshTargets = createUIElement("TextButton", tabDrill, UDim2.new(0.05, 0, 0, 50), "Refresh Targets")
+btnRefreshTargets.BackgroundColor3 = Color3.fromRGB(100, 120, 150)
+
+local lblSizeTitle = Instance.new("TextLabel", tabDrill)
+lblSizeTitle.Size = UDim2.new(0.9, 0, 0, 18)
+lblSizeTitle.Position = UDim2.new(0.05, 0, 0, 85)
+lblSizeTitle.Text = "DrillZone Size (XYZ):"
+lblSizeTitle.TextColor3 = Color3.fromRGB(255, 200, 100)
+lblSizeTitle.BackgroundTransparency = 1
+lblSizeTitle.TextXAlignment = Enum.TextXAlignment.Left
+lblSizeTitle.Font = Enum.Font.Code
+lblSizeTitle.TextSize = 11
+
+-- X Input
+local lblX = Instance.new("TextLabel", tabDrill)
+lblX.Size = UDim2.new(0.15, 0, 0, 24)
+lblX.Position = UDim2.new(0.05, 0, 0, 107)
+lblX.Text = "X:"
+lblX.TextColor3 = Theme.Text
+lblX.BackgroundTransparency = 1
+lblX.Font = Enum.Font.Code
+lblX.TextSize = 11
+
+local txtX = createUIElement("TextBox", tabDrill, UDim2.new(0.22, 0, 0, 107), "50")
+txtX.Size = UDim2.new(0.23, 0, 0, 24)
+txtX.ClearTextOnFocus = false
+
+-- Y Input
+local lblY = Instance.new("TextLabel", tabDrill)
+lblY.Size = UDim2.new(0.15, 0, 0, 24)
+lblY.Position = UDim2.new(0.47, 0, 0, 107)
+lblY.Text = "Y:"
+lblY.TextColor3 = Theme.Text
+lblY.BackgroundTransparency = 1
+lblY.Font = Enum.Font.Code
+lblY.TextSize = 11
+
+local txtY = createUIElement("TextBox", tabDrill, UDim2.new(0.63, 0, 0, 107), "25")
+txtY.Size = UDim2.new(0.23, 0, 0, 24)
+txtY.ClearTextOnFocus = false
+
+-- Z Input
+local lblZ = Instance.new("TextLabel", tabDrill)
+lblZ.Size = UDim2.new(0.15, 0, 0, 24)
+lblZ.Position = UDim2.new(0.05, 0, 0, 135)
+lblZ.Text = "Z:"
+lblZ.TextColor3 = Theme.Text
+lblZ.BackgroundTransparency = 1
+lblZ.Font = Enum.Font.Code
+lblZ.TextSize = 11
+
+local txtZ = createUIElement("TextBox", tabDrill, UDim2.new(0.22, 0, 0, 135), "50")
+txtZ.Size = UDim2.new(0.23, 0, 0, 24)
+txtZ.ClearTextOnFocus = false
+
+local btnApplySize = createUIElement("TextButton", tabDrill, UDim2.new(0.05, 0, 0, 165), "Apply Size")
+btnApplySize.BackgroundColor3 = Color3.fromRGB(100, 150, 100)
 
 -- === MODS TAB ELEMENTS ===
 local lblDrill = Instance.new("TextLabel", tabMods)
@@ -203,16 +300,21 @@ local btnTerminate = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0
 -- Tab Switching Logic
 local function switchTab(tabName)
     btnTabMain.BackgroundColor3 = Theme.TabBG
+    btnTabDrill.BackgroundColor3 = Theme.TabBG
     btnTabMods.BackgroundColor3 = Theme.TabBG
     btnTabMisc.BackgroundColor3 = Theme.TabBG
     
     tabMain.Visible = false
+    tabDrill.Visible = false
     tabMods.Visible = false
     tabMisc.Visible = false
     
     if tabName == "Main" then
         btnTabMain.BackgroundColor3 = Theme.Active
         tabMain.Visible = true
+    elseif tabName == "Drill" then
+        btnTabDrill.BackgroundColor3 = Theme.Active
+        tabDrill.Visible = true
     elseif tabName == "Mods" then
         btnTabMods.BackgroundColor3 = Theme.Active
         tabMods.Visible = true
@@ -223,6 +325,7 @@ local function switchTab(tabName)
 end
 
 btnTabMain.MouseButton1Click:Connect(function() switchTab("Main") end)
+btnTabDrill.MouseButton1Click:Connect(function() switchTab("Drill") end)
 btnTabMods.MouseButton1Click:Connect(function() switchTab("Mods") end)
 btnTabMisc.MouseButton1Click:Connect(function() switchTab("Misc") end)
 
@@ -276,6 +379,63 @@ local function safeWait(waitTime)
         
         task.wait(0.1)
         elapsed = elapsed + 0.1
+    end
+end
+
+-- DRIVER CHECK: Verify if player is in a specific drill
+local function isPlayerInDrill(drillModel)
+    if not drillModel then return false end
+    
+    local success, result = pcall(function()
+        -- Check for VehicleSeat with player as occupant
+        local vehicleSeat = drillModel:FindFirstChild("VehicleSeat")
+        if vehicleSeat and vehicleSeat:IsA("VehicleSeat") then
+            if vehicleSeat.Occupant and vehicleSeat.Occupant.Parent == player.Character then
+                return true
+            end
+        end
+        
+        -- Check Driver attribute
+        local driverAttr = drillModel:GetAttribute("Driver")
+        if driverAttr then
+            if driverAttr == player.UserId or driverAttr == player.Name then
+                return true
+            end
+        end
+        
+        return false
+    end)
+    
+    return result or false
+end
+
+-- FIND TARGET DRILL: Lock onto the drill player is currently in
+local function findTargetDrill()
+    local success, result = pcall(function()
+        local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+        if not vehiclesFolder then return nil end
+        
+        for _, vehicle in ipairs(vehiclesFolder:GetChildren()) do
+            if vehicle:IsA("Model") then
+                if isPlayerInDrill(vehicle) then
+                    return vehicle
+                end
+            end
+        end
+        return nil
+    end)
+    
+    return result or nil
+end
+
+-- UPDATE TARGET DISPLAY
+local function updateTargetDisplay()
+    if targetedDrill and targetedDrill.Parent then
+        lblTargetDrill.Text = targetedDrill.Name
+        lblTargetDrill.TextColor3 = Color3.fromRGB(100, 255, 100)
+    else
+        lblTargetDrill.Text = "None"
+        lblTargetDrill.TextColor3 = Color3.fromRGB(255, 100, 100)
     end
 end
 
@@ -349,57 +509,43 @@ local function getVehicleCargoData()
     return isFull, cargoText
 end
 
--- ==========================================
--- MODIFIERS (Read from TextBoxes)
--- ==========================================
+-- APPLY DRILL SIZE: Set XYZ values to DrillZone
 local function applyDrillSize()
-    local multi = tonumber(txtDrillSize.Text) or 1
+    if not targetedDrill then
+        lblStatus.Text = "Status: No drill targeted!"
+        return
+    end
     
-    pcall(function()
-        local vehicles = workspace:FindFirstChild("Vehicles")
-        local exaDrill = vehicles and vehicles:FindFirstChild("ExaDrill")
-        local body = exaDrill and exaDrill:FindFirstChild("Body")
-        local drillZone = body and body:FindFirstChild("DrillZone")
-        
-        if drillZone and drillZone:IsA("BasePart") then
-            if not drillZone:GetAttribute("OriginalSize") then
-                drillZone:SetAttribute("OriginalSize", drillZone.Size)
-            end
-            
-            local origSize = drillZone:GetAttribute("OriginalSize")
-            drillZone.Size = origSize * multi
-            
-            if multi > 1 then
-                drillZone.Transparency = 0.5
-            else
-                drillZone.Transparency = 1
+    local success, result = pcall(function()
+        local drillZone = targetedDrill:FindFirstChild("DrillZone")
+        if not drillZone then
+            -- Try deeper search
+            for _, part in ipairs(targetedDrill:GetDescendants()) do
+                if part.Name == "DrillZone" and part:IsA("BasePart") then
+                    drillZone = part
+                    break
+                end
             end
         end
+        
+        if not drillZone then
+            lblStatus.Text = "Status: No DrillZone found!"
+            return
+        end
+        
+        local x = tonumber(txtX.Text) or 50
+        local y = tonumber(txtY.Text) or 25
+        local z = tonumber(txtZ.Text) or 50
+        
+        drillZone.Size = Vector3.new(x, y, z)
+        lblStatus.Text = "Status: Drill size set to (" .. x .. ", " .. y .. ", " .. z .. ")"
+        lblTargetDrill.TextColor3 = Color3.fromRGB(150, 255, 150)
     end)
-end
-
-local function applyWalkSpeed()
-    local speed = tonumber(txtWalkSpeed.Text) or 16
-    local char = player.Character
-    if char then
-        local hum = char:FindFirstChild("Humanoid")
-        if hum then
-            hum.WalkSpeed = speed
-        end
+    
+    if not success then
+        lblStatus.Text = "Status: Error applying size!"
     end
 end
-
--- Apply modifications periodically
-task.spawn(function()
-    while task.wait(0.5) do
-        applyDrillSize()
-        
-        local speed = tonumber(txtWalkSpeed.Text)
-        if speed and speed ~= 16 then
-            applyWalkSpeed()
-        end
-    end
-end)
 
 -- ==========================================
 -- 3. Core Logic Functions
@@ -478,6 +624,58 @@ local function mineFunc()
 end
 
 -- ==========================================
+-- MODIFIERS (Read from TextBoxes)
+-- ==========================================
+local function applyDrillSizeMulti()
+    local multi = tonumber(txtDrillSize.Text) or 1
+    
+    pcall(function()
+        local vehicles = workspace:FindFirstChild("Vehicles")
+        local exaDrill = vehicles and vehicles:FindFirstChild("ExaDrill")
+        local body = exaDrill and exaDrill:FindFirstChild("Body")
+        local drillZone = body and body:FindFirstChild("DrillZone")
+        
+        if drillZone and drillZone:IsA("BasePart") then
+            if not drillZone:GetAttribute("OriginalSize") then
+                drillZone:SetAttribute("OriginalSize", drillZone.Size)
+            end
+            
+            local origSize = drillZone:GetAttribute("OriginalSize")
+            drillZone.Size = origSize * multi
+            
+            if multi > 1 then
+                drillZone.Transparency = 0.5
+            else
+                drillZone.Transparency = 1
+            end
+        end
+    end)
+end
+
+local function applyWalkSpeed()
+    local speed = tonumber(txtWalkSpeed.Text) or 16
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChild("Humanoid")
+        if hum then
+            hum.WalkSpeed = speed
+        end
+    end
+end
+
+-- Apply modifications periodically
+task.spawn(function()
+    while task.wait(0.5) do
+        applyDrillSizeMulti()
+        
+        local speed = tonumber(txtWalkSpeed.Text)
+        if speed and speed ~= 16 then
+            applyWalkSpeed()
+        end
+    end
+end)
+
+-- ==========================================
 -- 4. Main Loop & Events
 -- ==========================================
 local function mainLoop()
@@ -497,13 +695,13 @@ local minimized = false
 btnMinimize.MouseButton1Click:Connect(function()
     minimized = not minimized
     if minimized then
-        frame.Size = UDim2.new(0, 220, 0, 30)
-        contentFrame.Visible = false
+        frame.Size = UDim2.new(0, 280, 0, 30)
+        scrolling.Visible = false
         tabBar.Visible = false
         btnMinimize.Text = "+"
     else
-        frame.Size = UDim2.new(0, 220, 0, 300)
-        contentFrame.Visible = true
+        frame.Size = UDim2.new(0, 280, 0, 400)
+        scrolling.Visible = true
         tabBar.Visible = true
         btnMinimize.Text = "-"
     end
@@ -561,6 +759,20 @@ btnForceUnload.MouseButton1Click:Connect(function()
             lblCountdown.Text = "Time: 0s"
         end)
     end
+end)
+
+btnRefreshTargets.MouseButton1Click:Connect(function()
+    targetedDrill = findTargetDrill()
+    updateTargetDisplay()
+    if targetedDrill then
+        lblStatus.Text = "Status: Drill locked!"
+    else
+        lblStatus.Text = "Status: Sit in a drill first!"
+    end
+end)
+
+btnApplySize.MouseButton1Click:Connect(function()
+    applyDrillSize()
 end)
 
 btnTpPlot.MouseButton1Click:Connect(function()
