@@ -27,7 +27,7 @@ local success, err = pcall(function() screenGui.Parent = CoreGui end)
 if not success then screenGui.Parent = player.PlayerGui end
 
 local frame = Instance.new("Frame", screenGui)
-frame.Size = UDim2.new(0, 200, 0, 290)
+frame.Size = UDim2.new(0, 200, 0, 410) -- Increased height to fit TP Plot button
 frame.Position = UDim2.new(0, 10, 0, 10)
 frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 frame.ClipsDescendants = true
@@ -98,9 +98,30 @@ btnForceUnload.Text = "Force Unload"
 btnForceUnload.BackgroundColor3 = Color3.fromRGB(120, 60, 150)
 btnForceUnload.TextColor3 = Color3.new(1, 1, 1)
 
+local btnDrillSize = Instance.new("TextButton", contentFrame)
+btnDrillSize.Size = UDim2.new(0.9, 0, 0, 30)
+btnDrillSize.Position = UDim2.new(0.05, 0, 0, 220)
+btnDrillSize.Text = "Drill Hitbox: 1x"
+btnDrillSize.BackgroundColor3 = Color3.fromRGB(60, 100, 150)
+btnDrillSize.TextColor3 = Color3.new(1, 1, 1)
+
+local btnWalkSpeed = Instance.new("TextButton", contentFrame)
+btnWalkSpeed.Size = UDim2.new(0.9, 0, 0, 30)
+btnWalkSpeed.Position = UDim2.new(0.05, 0, 0, 260)
+btnWalkSpeed.Text = "WalkSpeed: 16"
+btnWalkSpeed.BackgroundColor3 = Color3.fromRGB(150, 80, 40)
+btnWalkSpeed.TextColor3 = Color3.new(1, 1, 1)
+
+local btnTpPlot = Instance.new("TextButton", contentFrame)
+btnTpPlot.Size = UDim2.new(0.9, 0, 0, 30)
+btnTpPlot.Position = UDim2.new(0.05, 0, 0, 300)
+btnTpPlot.Text = "TP to Plot"
+btnTpPlot.BackgroundColor3 = Color3.fromRGB(80, 150, 80)
+btnTpPlot.TextColor3 = Color3.new(1, 1, 1)
+
 local btnTerminate = Instance.new("TextButton", contentFrame)
 btnTerminate.Size = UDim2.new(0.9, 0, 0, 30)
-btnTerminate.Position = UDim2.new(0.05, 0, 0, 220)
+btnTerminate.Position = UDim2.new(0.05, 0, 0, 340)
 btnTerminate.Text = "Terminate"
 btnTerminate.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
 btnTerminate.TextColor3 = Color3.new(1, 1, 1)
@@ -162,38 +183,34 @@ local function getVehicleCargoData()
     local isFull = false
     local cargoText = nil
     
-    local function evaluateText(text)
-        if not text or text == "" then return end
-        local lowerText = string.lower(text)
-        
-        -- 1. Check for literal red "VEHICLE FULL" text
-        if string.find(lowerText, "vehicle full") then
-            isFull = true
-        end
-        
-        -- 2. Extract "(11/120)" style patterns
-        local cStr, mStr = string.match(lowerText, "(%d+)%s*/%s*(%d+)")
-        if cStr and mStr then
-            local current = tonumber(cStr)
-            local maxCap = tonumber(mStr)
-            
-            -- ENSURE max capacity matches the drill! (This ignores your 100/100 Health Bar)
-            if maxCap == VEHICLE_CAPACITY then
-                cargoText = tostring(current) .. " / " .. tostring(maxCap)
-                if current >= maxCap then
-                    isFull = true
-                end
-            end
-        end
-    end
-
     pcall(function()
-        -- Scan A: Check Workspace.Vehicles folder (Fast & Targetted)
         local vehiclesFolder = workspace:FindFirstChild("Vehicles")
         if vehiclesFolder then
             for _, vehicle in ipairs(vehiclesFolder:GetChildren()) do
                 if vehicle:IsA("Model") then
-                    -- Check Attributes
+                    
+                    -- ==========================================
+                    -- 1. DIRECT CARGO VOLUME COUNTING (Exact Path)
+                    -- ==========================================
+                    local cargoVolume = vehicle:FindFirstChild("CargoVolume")
+                    
+                    if cargoVolume then
+                        -- Literally just count the number of ores inside the folder
+                        local currentCount = #cargoVolume:GetChildren()
+                        
+                        cargoText = tostring(currentCount) .. " / " .. tostring(VEHICLE_CAPACITY)
+                        
+                        if currentCount >= VEHICLE_CAPACITY then
+                            isFull = true
+                        end
+                        
+                        -- We found exactly what we needed, stop checking!
+                        return 
+                    end
+                    
+                    -- ==========================================
+                    -- 2. ATTRIBUTES FALLBACK (Just in case)
+                    -- ==========================================
                     local current = vehicle:GetAttribute("StoredOres") or vehicle:GetAttribute("Cargo") or vehicle:GetAttribute("OreCount")
                     local maxCap = vehicle:GetAttribute("Capacity") or vehicle:GetAttribute("MaxCapacity")
                     
@@ -202,28 +219,104 @@ local function getVehicleCargoData()
                         if tonumber(current) >= tonumber(maxCap) then
                             isFull = true
                         end
-                    end
-                    
-                    -- Check physical TextLabels on the vehicle model
-                    for _, desc in ipairs(vehicle:GetDescendants()) do
-                        if desc:IsA("TextLabel") then
-                            evaluateText(desc.ContentText ~= "" and desc.ContentText or desc.Text)
-                        end
+                        return
                     end
                 end
-            end
-        end
-        
-        -- Scan B: Check PlayerGui (In case the popups are actually 2D UI rendered above the screen)
-        for _, desc in ipairs(player.PlayerGui:GetDescendants()) do
-            if desc:IsA("TextLabel") then
-                evaluateText(desc.ContentText ~= "" and desc.ContentText or desc.Text)
             end
         end
     end)
     
     return isFull, cargoText
 end
+
+-- ==========================================
+-- DRILL ZONE MODIFIER LOGIC
+-- ==========================================
+local drillMultipliers = {1, 3, 5, 10, 20}
+local currentDrillIndex = 1
+
+local function applyDrillSize()
+    local multi = drillMultipliers[currentDrillIndex]
+    
+    pcall(function()
+        local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+        if vehiclesFolder then
+            for _, vehicle in ipairs(vehiclesFolder:GetChildren()) do
+                if vehicle:IsA("Model") then
+                    local body = vehicle:FindFirstChild("Body")
+                    if body then
+                        local drillZone = body:FindFirstChild("DrillZone")
+                        if drillZone and drillZone:IsA("BasePart") then
+                            
+                            -- Save the original size securely as an Attribute the first time we touch it
+                            if not drillZone:GetAttribute("OriginalSize") then
+                                drillZone:SetAttribute("OriginalSize", drillZone.Size)
+                            end
+                            
+                            local origSize = drillZone:GetAttribute("OriginalSize")
+                            
+                            -- Apply the multiplier safely
+                            drillZone.Size = origSize * multi
+                            
+                            -- Make the Hitbox slightly transparent so you aren't blinded by a massive invisible block
+                            if multi > 1 then
+                                drillZone.Transparency = 0.5
+                            else
+                                drillZone.Transparency = 1 -- Hide it back when it's 1x
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+btnDrillSize.MouseButton1Click:Connect(function()
+    currentDrillIndex = currentDrillIndex + 1
+    if currentDrillIndex > #drillMultipliers then
+        currentDrillIndex = 1
+    end
+    
+    local multi = drillMultipliers[currentDrillIndex]
+    btnDrillSize.Text = "Drill Hitbox: " .. multi .. "x"
+    
+    -- Apply immediately upon clicking
+    applyDrillSize()
+end)
+
+-- ==========================================
+-- WALK SPEED MODIFIER LOGIC
+-- ==========================================
+local walkSpeeds = {16, 32, 64, 100}
+local currentSpeedIndex = 1
+
+local function applyWalkSpeed()
+    local speed = walkSpeeds[currentSpeedIndex]
+    if player.Character and player.Character:FindFirstChild("Humanoid") then
+        player.Character.Humanoid.WalkSpeed = speed
+    end
+end
+
+btnWalkSpeed.MouseButton1Click:Connect(function()
+    currentSpeedIndex = currentSpeedIndex + 1
+    if currentSpeedIndex > #walkSpeeds then
+        currentSpeedIndex = 1
+    end
+    
+    local speed = walkSpeeds[currentSpeedIndex]
+    btnWalkSpeed.Text = "WalkSpeed: " .. speed
+    applyWalkSpeed()
+end)
+
+-- Force apply walkspeed periodically to prevent the game from resetting it
+task.spawn(function()
+    while task.wait(0.5) do
+        if currentSpeedIndex > 1 then
+            applyWalkSpeed()
+        end
+    end
+end)
 
 -- ==========================================
 -- 3. Core Logic Functions
@@ -273,6 +366,9 @@ local function mineFunc()
     while isRunning do
         -- Constantly fetch the live state every 0.5 seconds
         local isFull, cargoText = getVehicleCargoData()
+        
+        -- Always ensure the drill zone stays modified even if the game tries to reset the model!
+        applyDrillSize()
         
         if cargoText then
             lblCountdown.Text = "Cargo: " .. cargoText
@@ -325,7 +421,7 @@ btnMinimize.MouseButton1Click:Connect(function()
         contentFrame.Visible = false
         btnMinimize.Text = "+"
     else
-        frame.Size = UDim2.new(0, 200, 0, 290)
+        frame.Size = UDim2.new(0, 200, 0, 410)
         contentFrame.Visible = true
         btnMinimize.Text = "-"
     end
@@ -390,6 +486,59 @@ btnForceUnload.MouseButton1Click:Connect(function()
     end
 end)
 
+btnTpPlot.MouseButton1Click:Connect(function()
+    -- 1. Try to get plot ID from Player Attributes
+    local plotId = player:GetAttribute("Plot") or player:GetAttribute("PlotID") or player:GetAttribute("PlotId") or player:GetAttribute("plot")
+    
+    -- 2. Try to get plot ID from internal StringValue/IntValue properties
+    if not plotId then
+        local plotVal = player:FindFirstChild("Plot") or player:FindFirstChild("PlotID") or player:FindFirstChild("PlotId")
+        if plotVal then
+            plotId = plotVal.Value
+        end
+    end
+
+    local plotsFolder = workspace:FindFirstChild("Plots")
+    local targetPlot = nil
+
+    if plotsFolder then
+        -- Attempt to find the plot numerically/by string (e.g. workspace.Plots["4"])
+        if plotId then
+            targetPlot = plotsFolder:FindFirstChild(tostring(plotId))
+        end
+
+        -- 3. Fallback: Iterate through all plots and check for Ownership attributes
+        if not targetPlot then
+            for _, plot in ipairs(plotsFolder:GetChildren()) do
+                local ownerAttr = plot:GetAttribute("Owner") or plot:GetAttribute("OwnerId") or plot:GetAttribute("Player")
+                if ownerAttr == player.Name or ownerAttr == player.UserId then
+                    targetPlot = plot
+                    break
+                end
+                
+                local ownerVal = plot:FindFirstChild("Owner") or plot:FindFirstChild("OwnerId")
+                if ownerVal and (ownerVal.Value == player.Name or ownerVal.Value == player.UserId) then
+                    targetPlot = plot
+                    break
+                end
+            end
+        end
+
+        if targetPlot then
+            -- Teleport securely using GetPivot() to grab the plot's center CFrame, adding +10 on the Y axis to avoid clipping
+            local targetCFrame = targetPlot:GetPivot()
+            if targetCFrame then
+                teleport(targetCFrame + Vector3.new(0, 10, 0))
+                lblStatus.Text = "Status: TP'd to Plot!"
+            end
+        else
+            lblStatus.Text = "Status: Plot ID missing!"
+        end
+    else
+        lblStatus.Text = "Status: Plots folder missing!"
+    end
+end)
+
 local function terminateScript()
     isRunning = false
     isPaused = false
@@ -410,3 +559,4 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         end
     end
 end)
+```
