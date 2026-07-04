@@ -3,14 +3,14 @@ local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local VirtualUser = game:GetService("VirtualUser")
 
--- Wait securely for the player to exist (fixes auto-execute bugs)
+-- Wait securely for the player to exist
 local player = Players.LocalPlayer
 while not player do
     task.wait(0.1)
     player = Players.LocalPlayer
 end
 
--- Helper to dynamically get HRP so the script doesn't break when you die/respawn
+-- Helper to dynamically get HRP
 local function getHRP()
     local char = player.Character
     if char then
@@ -25,7 +25,7 @@ local isRunning = false
 local loopActive = false
 local isPaused = false
 local forceUnloadTrigger = false
-local targetedDrill = nil
+local targetedVehicle = nil
 
 -- ANTI-AFK (On by default)
 player.Idled:Connect(function()
@@ -35,7 +35,7 @@ end)
 
 -- CONFIGURATION
 local VEHICLE_CAPACITY = 120 
-local MAX_CARGO_CHILDREN = 240 -- The exact number of instances in CargoVolume when full (120 ores * 2 parts/welds)
+local MAX_CARGO_CHILDREN = 240 -- The exact number of instances in CargoVolume when full
 
 -- ==========================================
 -- 1. GUI Setup (Executor Safe & Redesigned)
@@ -96,9 +96,9 @@ tabBar.Position = UDim2.new(0, 0, 0, 30)
 tabBar.BackgroundColor3 = Theme.TabBG
 tabBar.BorderSizePixel = 0
 
-local function createTabBtn(text, pos)
+local function createTabBtn(text, pos, widthStr)
     local btn = Instance.new("TextButton", tabBar)
-    btn.Size = UDim2.new(0.25, 0, 1, 0)
+    btn.Size = UDim2.new(widthStr, 0, 1, 0)
     btn.Position = pos
     btn.Text = text
     btn.BackgroundColor3 = Theme.TabBG
@@ -109,10 +109,10 @@ local function createTabBtn(text, pos)
     return btn
 end
 
-local btnTabMain = createTabBtn("Main", UDim2.new(0, 0, 0, 0))
-local btnTabDrill = createTabBtn("Drill", UDim2.new(0.25, 0, 0, 0))
-local btnTabMods = createTabBtn("Mods", UDim2.new(0.5, 0, 0, 0))
-local btnTabMisc = createTabBtn("Misc", UDim2.new(0.75, 0, 0, 0))
+-- 3 Tabs now (Main, Mods, Misc) spread evenly
+local btnTabMain = createTabBtn("Main", UDim2.new(0, 0, 0, 0), 0.334)
+local btnTabMods = createTabBtn("Mods", UDim2.new(0.334, 0, 0, 0), 0.333)
+local btnTabMisc = createTabBtn("Misc", UDim2.new(0.667, 0, 0, 0), 0.333)
 btnTabMain.BackgroundColor3 = Theme.Active -- Default active
 
 -- Content Container with Scroll
@@ -132,11 +132,6 @@ scrolling.ScrollBarThickness = 6
 local tabMain = Instance.new("Frame", scrolling)
 tabMain.Size = UDim2.new(1, 0, 1, 0)
 tabMain.BackgroundTransparency = 1
-
-local tabDrill = Instance.new("Frame", scrolling)
-tabDrill.Size = UDim2.new(1, 0, 1, 0)
-tabDrill.BackgroundTransparency = 1
-tabDrill.Visible = false
 
 local tabMods = Instance.new("Frame", scrolling)
 tabMods.Size = UDim2.new(1, 0, 1, 0)
@@ -163,131 +158,84 @@ local function createUIElement(className, parent, pos, text)
 end
 
 -- === MAIN TAB ELEMENTS ===
-local lblStatus = Instance.new("TextLabel", tabMain)
-lblStatus.Size = UDim2.new(0.9, 0, 0, 20)
-lblStatus.Position = UDim2.new(0.05, 0, 0, 10)
-lblStatus.Text = "Status: Idle"
-lblStatus.TextColor3 = Theme.Text
-lblStatus.Font = Enum.Font.Code
-lblStatus.BackgroundTransparency = 1
-lblStatus.TextSize = 12
 
-local lblCountdown = Instance.new("TextLabel", tabMain)
-lblCountdown.Size = UDim2.new(0.9, 0, 0, 20)
-lblCountdown.Position = UDim2.new(0.05, 0, 0, 30)
-lblCountdown.Text = "Time: 0s"
-lblCountdown.TextColor3 = Theme.Text
-lblCountdown.Font = Enum.Font.Code
-lblCountdown.BackgroundTransparency = 1
-lblCountdown.TextSize = 12
+-- Vehicle Selector
+local lblTargetTitle = Instance.new("TextLabel", tabMain)
+lblTargetTitle.Size = UDim2.new(0.9, 0, 0, 20)
+lblTargetTitle.Position = UDim2.new(0.05, 0, 0, 5)
+lblTargetTitle.Text = "Target Vehicle:"
+lblTargetTitle.TextColor3 = Color3.fromRGB(255, 200, 100)
+lblTargetTitle.Font = Enum.Font.Code
+lblTargetTitle.BackgroundTransparency = 1
+lblTargetTitle.TextXAlignment = Enum.TextXAlignment.Left
+lblTargetTitle.TextSize = 12
 
-local btnStart = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 60), "Start")
-local btnPause = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 95), "Pause")
-local btnForceUnload = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 130), "Force Unload")
+local btnPrevVeh = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 25), "<")
+btnPrevVeh.Size = UDim2.new(0.15, 0, 0, 24)
 
--- === DRILL TAB ELEMENTS (NEW) ===
-local lblDrillTarget = Instance.new("TextLabel", tabDrill)
-lblDrillTarget.Size = UDim2.new(0.9, 0, 0, 18)
-lblDrillTarget.Position = UDim2.new(0.05, 0, 0, 10)
-lblDrillTarget.Text = "Target Drill:"
-lblDrillTarget.TextColor3 = Color3.fromRGB(255, 200, 100)
-lblDrillTarget.BackgroundTransparency = 1
-lblDrillTarget.TextXAlignment = Enum.TextXAlignment.Left
-lblDrillTarget.Font = Enum.Font.Code
-lblDrillTarget.TextSize = 11
+local lblSelectedVeh = Instance.new("TextLabel", tabMain)
+lblSelectedVeh.Size = UDim2.new(0.55, 0, 0, 24)
+lblSelectedVeh.Position = UDim2.new(0.225, 0, 0, 25)
+lblSelectedVeh.Text = "None"
+lblSelectedVeh.TextColor3 = Color3.fromRGB(100, 255, 100)
+lblSelectedVeh.Font = Enum.Font.Code
+lblSelectedVeh.BackgroundTransparency = 1
+lblSelectedVeh.TextSize = 12
+lblSelectedVeh.TextScaled = true
 
-local lblTargetDrill = Instance.new("TextLabel", tabDrill)
-lblTargetDrill.Size = UDim2.new(0.9, 0, 0, 18)
-lblTargetDrill.Position = UDim2.new(0.05, 0, 0, 28)
-lblTargetDrill.Text = "None"
-lblTargetDrill.TextColor3 = Color3.fromRGB(100, 200, 100)
-lblTargetDrill.BackgroundTransparency = 1
-lblTargetDrill.TextXAlignment = Enum.TextXAlignment.Left
-lblTargetDrill.Font = Enum.Font.Code
-lblTargetDrill.TextSize = 12
+local btnNextVeh = createUIElement("TextButton", tabMain, UDim2.new(0.8, 0, 0, 25), ">")
+btnNextVeh.Size = UDim2.new(0.15, 0, 0, 24)
 
-local btnRefreshTargets = createUIElement("TextButton", tabDrill, UDim2.new(0.05, 0, 0, 50), "Refresh Targets")
-btnRefreshTargets.BackgroundColor3 = Color3.fromRGB(100, 120, 150)
-
-local lblSizeTitle = Instance.new("TextLabel", tabDrill)
-lblSizeTitle.Size = UDim2.new(0.9, 0, 0, 18)
-lblSizeTitle.Position = UDim2.new(0.05, 0, 0, 85)
-lblSizeTitle.Text = "DrillZone Size (XYZ):"
-lblSizeTitle.TextColor3 = Color3.fromRGB(255, 200, 100)
-lblSizeTitle.BackgroundTransparency = 1
-lblSizeTitle.TextXAlignment = Enum.TextXAlignment.Left
-lblSizeTitle.Font = Enum.Font.Code
-lblSizeTitle.TextSize = 11
-
--- X Input
-local lblX = Instance.new("TextLabel", tabDrill)
-lblX.Size = UDim2.new(0.15, 0, 0, 24)
-lblX.Position = UDim2.new(0.05, 0, 0, 107)
-lblX.Text = "X:"
-lblX.TextColor3 = Theme.Text
-lblX.BackgroundTransparency = 1
-lblX.Font = Enum.Font.Code
-lblX.TextSize = 11
-
-local txtX = createUIElement("TextBox", tabDrill, UDim2.new(0.22, 0, 0, 107), "50")
-txtX.Size = UDim2.new(0.23, 0, 0, 24)
-txtX.ClearTextOnFocus = false
-
--- Y Input
-local lblY = Instance.new("TextLabel", tabDrill)
-lblY.Size = UDim2.new(0.15, 0, 0, 24)
-lblY.Position = UDim2.new(0.47, 0, 0, 107)
-lblY.Text = "Y:"
-lblY.TextColor3 = Theme.Text
-lblY.BackgroundTransparency = 1
-lblY.Font = Enum.Font.Code
-lblY.TextSize = 11
-
-local txtY = createUIElement("TextBox", tabDrill, UDim2.new(0.63, 0, 0, 107), "25")
-txtY.Size = UDim2.new(0.23, 0, 0, 24)
-txtY.ClearTextOnFocus = false
-
--- Z Input
-local lblZ = Instance.new("TextLabel", tabDrill)
-lblZ.Size = UDim2.new(0.15, 0, 0, 24)
-lblZ.Position = UDim2.new(0.05, 0, 0, 135)
-lblZ.Text = "Z:"
-lblZ.TextColor3 = Theme.Text
-lblZ.BackgroundTransparency = 1
-lblZ.Font = Enum.Font.Code
-lblZ.TextSize = 11
-
-local txtZ = createUIElement("TextBox", tabDrill, UDim2.new(0.22, 0, 0, 135), "50")
-txtZ.Size = UDim2.new(0.23, 0, 0, 24)
-txtZ.ClearTextOnFocus = false
-
-local btnApplySize = createUIElement("TextButton", tabDrill, UDim2.new(0.05, 0, 0, 165), "Apply Size")
-btnApplySize.BackgroundColor3 = Color3.fromRGB(100, 150, 100)
-
--- === MODS TAB ELEMENTS ===
-local lblDrill = Instance.new("TextLabel", tabMods)
+-- Drill Multiplier
+local lblDrill = Instance.new("TextLabel", tabMain)
 lblDrill.Size = UDim2.new(0.9, 0, 0, 20)
-lblDrill.Position = UDim2.new(0.05, 0, 0, 10)
+lblDrill.Position = UDim2.new(0.05, 0, 0, 55)
 lblDrill.Text = "Drill Multiplier (e.g. 5):"
 lblDrill.TextColor3 = Theme.Text
 lblDrill.Font = Enum.Font.Code
 lblDrill.BackgroundTransparency = 1
 lblDrill.TextXAlignment = Enum.TextXAlignment.Left
 
-local txtDrillSize = createUIElement("TextBox", tabMods, UDim2.new(0.05, 0, 0, 30), "1")
+local txtDrillSize = createUIElement("TextBox", tabMain, UDim2.new(0.05, 0, 0, 75), "1")
 txtDrillSize.PlaceholderText = "1"
 txtDrillSize.ClearTextOnFocus = false
 
+-- Status & Main Buttons
+local lblStatus = Instance.new("TextLabel", tabMain)
+lblStatus.Size = UDim2.new(0.9, 0, 0, 20)
+lblStatus.Position = UDim2.new(0.05, 0, 0, 115)
+lblStatus.Text = "Status: Idle"
+lblStatus.TextColor3 = Theme.Text
+lblStatus.Font = Enum.Font.Code
+lblStatus.BackgroundTransparency = 1
+lblStatus.TextSize = 12
+lblStatus.TextXAlignment = Enum.TextXAlignment.Left
+
+local lblCountdown = Instance.new("TextLabel", tabMain)
+lblCountdown.Size = UDim2.new(0.9, 0, 0, 20)
+lblCountdown.Position = UDim2.new(0.05, 0, 0, 135)
+lblCountdown.Text = "Cargo: N/A"
+lblCountdown.TextColor3 = Theme.Text
+lblCountdown.Font = Enum.Font.Code
+lblCountdown.BackgroundTransparency = 1
+lblCountdown.TextSize = 12
+lblCountdown.TextXAlignment = Enum.TextXAlignment.Left
+
+local btnStart = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 165), "Start")
+local btnPause = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 200), "Pause")
+local btnForceUnload = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 235), "Force Unload")
+
+-- === MODS TAB ELEMENTS ===
 local lblSpeed = Instance.new("TextLabel", tabMods)
 lblSpeed.Size = UDim2.new(0.9, 0, 0, 20)
-lblSpeed.Position = UDim2.new(0.05, 0, 0, 70)
+lblSpeed.Position = UDim2.new(0.05, 0, 0, 10)
 lblSpeed.Text = "WalkSpeed (e.g. 64):"
 lblSpeed.TextColor3 = Theme.Text
 lblSpeed.Font = Enum.Font.Code
 lblSpeed.BackgroundTransparency = 1
 lblSpeed.TextXAlignment = Enum.TextXAlignment.Left
 
-local txtWalkSpeed = createUIElement("TextBox", tabMods, UDim2.new(0.05, 0, 0, 90), "16")
+local txtWalkSpeed = createUIElement("TextBox", tabMods, UDim2.new(0.05, 0, 0, 30), "16")
 txtWalkSpeed.PlaceholderText = "16"
 txtWalkSpeed.ClearTextOnFocus = false
 
@@ -300,21 +248,16 @@ local btnTerminate = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0
 -- Tab Switching Logic
 local function switchTab(tabName)
     btnTabMain.BackgroundColor3 = Theme.TabBG
-    btnTabDrill.BackgroundColor3 = Theme.TabBG
     btnTabMods.BackgroundColor3 = Theme.TabBG
     btnTabMisc.BackgroundColor3 = Theme.TabBG
     
     tabMain.Visible = false
-    tabDrill.Visible = false
     tabMods.Visible = false
     tabMisc.Visible = false
     
     if tabName == "Main" then
         btnTabMain.BackgroundColor3 = Theme.Active
         tabMain.Visible = true
-    elseif tabName == "Drill" then
-        btnTabDrill.BackgroundColor3 = Theme.Active
-        tabDrill.Visible = true
     elseif tabName == "Mods" then
         btnTabMods.BackgroundColor3 = Theme.Active
         tabMods.Visible = true
@@ -325,12 +268,66 @@ local function switchTab(tabName)
 end
 
 btnTabMain.MouseButton1Click:Connect(function() switchTab("Main") end)
-btnTabDrill.MouseButton1Click:Connect(function() switchTab("Drill") end)
 btnTabMods.MouseButton1Click:Connect(function() switchTab("Mods") end)
 btnTabMisc.MouseButton1Click:Connect(function() switchTab("Misc") end)
 
 -- ==========================================
--- 2. Helper Functions & Scanners
+-- 2. Vehicle Selector Logic
+-- ==========================================
+local currentVehicleIndex = 0
+local vehicleList = {}
+
+local function refreshVehicleList()
+    vehicleList = {}
+    local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+    if vehiclesFolder then
+        for _, v in ipairs(vehiclesFolder:GetChildren()) do
+            if v:IsA("Model") then
+                table.insert(vehicleList, v)
+            end
+        end
+    end
+end
+
+local function updateVehicleSelection()
+    if #vehicleList == 0 then
+        targetedVehicle = nil
+        lblSelectedVeh.Text = "None Found"
+        lblSelectedVeh.TextColor3 = Color3.fromRGB(255, 100, 100)
+    else
+        if currentVehicleIndex < 1 then currentVehicleIndex = #vehicleList end
+        if currentVehicleIndex > #vehicleList then currentVehicleIndex = 1 end
+        
+        targetedVehicle = vehicleList[currentVehicleIndex]
+        lblSelectedVeh.Text = targetedVehicle.Name
+        lblSelectedVeh.TextColor3 = Color3.fromRGB(100, 255, 100)
+    end
+end
+
+btnPrevVeh.MouseButton1Click:Connect(function()
+    refreshVehicleList()
+    currentVehicleIndex = currentVehicleIndex - 1
+    updateVehicleSelection()
+end)
+
+btnNextVeh.MouseButton1Click:Connect(function()
+    refreshVehicleList()
+    currentVehicleIndex = currentVehicleIndex + 1
+    updateVehicleSelection()
+end)
+
+-- Initial Auto-Scan for vehicles
+task.spawn(function()
+    task.wait(1)
+    refreshVehicleList()
+    if #vehicleList > 0 then
+        currentVehicleIndex = 1
+        updateVehicleSelection()
+    end
+end)
+
+-- ==========================================
+-- 3. Helper Functions & Scanners
 -- ==========================================
 local function pressKey(keyCode, delayTime)
     VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
@@ -382,63 +379,6 @@ local function safeWait(waitTime)
     end
 end
 
--- DRIVER CHECK: Verify if player is in a specific drill
-local function isPlayerInDrill(drillModel)
-    if not drillModel then return false end
-    
-    local success, result = pcall(function()
-        -- Check for VehicleSeat with player as occupant
-        local vehicleSeat = drillModel:FindFirstChild("VehicleSeat")
-        if vehicleSeat and vehicleSeat:IsA("VehicleSeat") then
-            if vehicleSeat.Occupant and vehicleSeat.Occupant.Parent == player.Character then
-                return true
-            end
-        end
-        
-        -- Check Driver attribute
-        local driverAttr = drillModel:GetAttribute("Driver")
-        if driverAttr then
-            if driverAttr == player.UserId or driverAttr == player.Name then
-                return true
-            end
-        end
-        
-        return false
-    end)
-    
-    return result or false
-end
-
--- FIND TARGET DRILL: Lock onto the drill player is currently in
-local function findTargetDrill()
-    local success, result = pcall(function()
-        local vehiclesFolder = workspace:FindFirstChild("Vehicles")
-        if not vehiclesFolder then return nil end
-        
-        for _, vehicle in ipairs(vehiclesFolder:GetChildren()) do
-            if vehicle:IsA("Model") then
-                if isPlayerInDrill(vehicle) then
-                    return vehicle
-                end
-            end
-        end
-        return nil
-    end)
-    
-    return result or nil
-end
-
--- UPDATE TARGET DISPLAY
-local function updateTargetDisplay()
-    if targetedDrill and targetedDrill.Parent then
-        lblTargetDrill.Text = targetedDrill.Name
-        lblTargetDrill.TextColor3 = Color3.fromRGB(100, 255, 100)
-    else
-        lblTargetDrill.Text = "None"
-        lblTargetDrill.TextColor3 = Color3.fromRGB(255, 100, 100)
-    end
-end
-
 -- DYNAMIC UNLOADER SCANNER
 local function getUnloaderCFrame()
     pcall(function()
@@ -452,17 +392,12 @@ local function getUnloaderCFrame()
         if not pFolder2 then return end
         
         for _, child in ipairs(pFolder2:GetChildren()) do
-            -- Look for any model whose name contains "Unloader" (e.g., Unloader5)
             if string.find(string.lower(child.Name), "unloader") then
-                -- Attempt to find the specific ProximityPrompt part to teleport accurately
                 local prompt = child:FindFirstChildWhichIsA("ProximityPrompt", true)
                 if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then
-                    -- Teleport to the prompt part, lifted up slightly to prevent clipping
                     wp1 = prompt.Parent.CFrame + Vector3.new(0, 3, 0)
                     return
                 end
-                
-                -- Fallback: Use the model's center pivot
                 wp1 = child:GetPivot() + Vector3.new(0, 3, 0)
                 return
             end
@@ -477,31 +412,27 @@ local function getVehicleCargoData()
     local cargoText = nil
     
     pcall(function()
-        local vehiclesFolder = workspace:FindFirstChild("Vehicles")
-        if vehiclesFolder then
-            for _, vehicle in ipairs(vehiclesFolder:GetChildren()) do
-                if vehicle:IsA("Model") then
-                    
-                    local cargoVolume = vehicle:FindFirstChild("CargoVolume")
-                    if cargoVolume then
-                        local currentCount = #cargoVolume:GetChildren()
-                        local estimatedOres = math.floor(currentCount / (MAX_CARGO_CHILDREN / VEHICLE_CAPACITY))
-                        if estimatedOres > VEHICLE_CAPACITY then estimatedOres = VEHICLE_CAPACITY end
-                        
-                        cargoText = tostring(estimatedOres) .. " / " .. tostring(VEHICLE_CAPACITY) .. " [Raw: " .. tostring(currentCount) .. "]"
-                        if currentCount >= MAX_CARGO_CHILDREN then isFull = true end
-                        return 
-                    end
-                    
-                    local current = vehicle:GetAttribute("StoredOres") or vehicle:GetAttribute("Cargo") or vehicle:GetAttribute("OreCount")
-                    local maxCap = vehicle:GetAttribute("Capacity") or vehicle:GetAttribute("MaxCapacity")
-                    
-                    if current and maxCap and tonumber(maxCap) == VEHICLE_CAPACITY then
-                        cargoText = tostring(current) .. " / " .. tostring(maxCap)
-                        if tonumber(current) >= tonumber(maxCap) then isFull = true end
-                        return
-                    end
-                end
+        if targetedVehicle and targetedVehicle.Parent then
+            local vehicle = targetedVehicle
+            
+            local cargoVolume = vehicle:FindFirstChild("CargoVolume")
+            if cargoVolume then
+                local currentCount = #cargoVolume:GetChildren()
+                local estimatedOres = math.floor(currentCount / (MAX_CARGO_CHILDREN / VEHICLE_CAPACITY))
+                if estimatedOres > VEHICLE_CAPACITY then estimatedOres = VEHICLE_CAPACITY end
+                
+                cargoText = tostring(estimatedOres) .. " / " .. tostring(VEHICLE_CAPACITY) .. " [Raw: " .. tostring(currentCount) .. "]"
+                if currentCount >= MAX_CARGO_CHILDREN then isFull = true end
+                return 
+            end
+            
+            local current = vehicle:GetAttribute("StoredOres") or vehicle:GetAttribute("Cargo") or vehicle:GetAttribute("OreCount")
+            local maxCap = vehicle:GetAttribute("Capacity") or vehicle:GetAttribute("MaxCapacity")
+            
+            if current and maxCap then
+                cargoText = tostring(current) .. " / " .. tostring(maxCap)
+                if tonumber(current) >= tonumber(maxCap) then isFull = true end
+                return
             end
         end
     end)
@@ -509,52 +440,14 @@ local function getVehicleCargoData()
     return isFull, cargoText
 end
 
--- APPLY DRILL SIZE: Set XYZ values to DrillZone
-local function applyDrillSize()
-    if not targetedDrill then
-        lblStatus.Text = "Status: No drill targeted!"
-        return
-    end
-    
-    local success, result = pcall(function()
-        local drillZone = targetedDrill:FindFirstChild("DrillZone")
-        if not drillZone then
-            -- Try deeper search
-            for _, part in ipairs(targetedDrill:GetDescendants()) do
-                if part.Name == "DrillZone" and part:IsA("BasePart") then
-                    drillZone = part
-                    break
-                end
-            end
-        end
-        
-        if not drillZone then
-            lblStatus.Text = "Status: No DrillZone found!"
-            return
-        end
-        
-        local x = tonumber(txtX.Text) or 50
-        local y = tonumber(txtY.Text) or 25
-        local z = tonumber(txtZ.Text) or 50
-        
-        drillZone.Size = Vector3.new(x, y, z)
-        lblStatus.Text = "Status: Drill size set to (" .. x .. ", " .. y .. ", " .. z .. ")"
-        lblTargetDrill.TextColor3 = Color3.fromRGB(150, 255, 150)
-    end)
-    
-    if not success then
-        lblStatus.Text = "Status: Error applying size!"
-    end
-end
-
 -- ==========================================
--- 3. Core Logic Functions
+-- 4. Core Logic Functions
 -- ==========================================
 local function unloadFunc()
     if not isRunning then return end
     
     lblStatus.Text = "Status: Unloading..."
-    lblCountdown.Text = "Time: N/A"
+    lblCountdown.Text = "Cargo: N/A"
     
     pressKey(Enum.KeyCode.E, 0.1)
     safeWait(0.28)
@@ -598,6 +491,8 @@ local function mineFunc()
         
         if cargoText then
             lblCountdown.Text = "Cargo: " .. cargoText
+        else
+            lblCountdown.Text = "Cargo: Target missing!"
         end
         
         safeWait(0.5) 
@@ -630,23 +525,28 @@ local function applyDrillSizeMulti()
     local multi = tonumber(txtDrillSize.Text) or 1
     
     pcall(function()
-        local vehicles = workspace:FindFirstChild("Vehicles")
-        local exaDrill = vehicles and vehicles:FindFirstChild("ExaDrill")
-        local body = exaDrill and exaDrill:FindFirstChild("Body")
-        local drillZone = body and body:FindFirstChild("DrillZone")
-        
-        if drillZone and drillZone:IsA("BasePart") then
-            if not drillZone:GetAttribute("OriginalSize") then
-                drillZone:SetAttribute("OriginalSize", drillZone.Size)
+        if targetedVehicle and targetedVehicle.Parent then
+            local body = targetedVehicle:FindFirstChild("Body")
+            local drillZone = body and body:FindFirstChild("DrillZone")
+            
+            -- Fallback deep search if not found in Body
+            if not drillZone then
+                drillZone = targetedVehicle:FindFirstChild("DrillZone", true)
             end
             
-            local origSize = drillZone:GetAttribute("OriginalSize")
-            drillZone.Size = origSize * multi
-            
-            if multi > 1 then
-                drillZone.Transparency = 0.5
-            else
-                drillZone.Transparency = 1
+            if drillZone and drillZone:IsA("BasePart") then
+                if not drillZone:GetAttribute("OriginalSize") then
+                    drillZone:SetAttribute("OriginalSize", drillZone.Size)
+                end
+                
+                local origSize = drillZone:GetAttribute("OriginalSize")
+                drillZone.Size = origSize * multi
+                
+                if multi > 1 then
+                    drillZone.Transparency = 0.5
+                else
+                    drillZone.Transparency = 1
+                end
             end
         end
     end)
@@ -676,7 +576,7 @@ task.spawn(function()
 end)
 
 -- ==========================================
--- 4. Main Loop & Events
+-- 5. Main Loop & Events
 -- ==========================================
 local function mainLoop()
     loopActive = true
@@ -687,7 +587,7 @@ local function mainLoop()
         task.wait(0.1)
     end
     lblStatus.Text = "Status: Idle"
-    lblCountdown.Text = "Time: 0s"
+    lblCountdown.Text = "Cargo: N/A"
     loopActive = false
 end
 
@@ -708,7 +608,13 @@ btnMinimize.MouseButton1Click:Connect(function()
 end)
 
 local function startScript()
-    -- Automatically grab the unloader location before starting
+    if not targetedVehicle then
+        btnStart.Text = "Select a Vehicle First!"
+        task.wait(1.5)
+        if not isRunning then btnStart.Text = "Start" end
+        return
+    end
+
     getUnloaderCFrame()
     
     if not wp1 then
@@ -756,23 +662,9 @@ btnForceUnload.MouseButton1Click:Connect(function()
             unloadFunc()
             isRunning = false
             lblStatus.Text = "Status: Idle"
-            lblCountdown.Text = "Time: 0s"
+            lblCountdown.Text = "Cargo: N/A"
         end)
     end
-end)
-
-btnRefreshTargets.MouseButton1Click:Connect(function()
-    targetedDrill = findTargetDrill()
-    updateTargetDisplay()
-    if targetedDrill then
-        lblStatus.Text = "Status: Drill locked!"
-    else
-        lblStatus.Text = "Status: Sit in a drill first!"
-    end
-end)
-
-btnApplySize.MouseButton1Click:Connect(function()
-    applyDrillSize()
 end)
 
 btnTpPlot.MouseButton1Click:Connect(function()
