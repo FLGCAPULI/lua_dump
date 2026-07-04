@@ -239,34 +239,25 @@ local function applyDrillSize()
     local multi = drillMultipliers[currentDrillIndex]
     
     pcall(function()
-        local vehiclesFolder = workspace:FindFirstChild("Vehicles")
-        if vehiclesFolder then
-            for _, vehicle in ipairs(vehiclesFolder:GetChildren()) do
-                if vehicle:IsA("Model") then
-                    local body = vehicle:FindFirstChild("Body")
-                    if body then
-                        local drillZone = body:FindFirstChild("DrillZone")
-                        if drillZone and drillZone:IsA("BasePart") then
-                            
-                            -- Save the original size securely as an Attribute the first time we touch it
-                            if not drillZone:GetAttribute("OriginalSize") then
-                                drillZone:SetAttribute("OriginalSize", drillZone.Size)
-                            end
-                            
-                            local origSize = drillZone:GetAttribute("OriginalSize")
-                            
-                            -- Apply the multiplier safely
-                            drillZone.Size = origSize * multi
-                            
-                            -- Make the Hitbox slightly transparent so you aren't blinded by a massive invisible block
-                            if multi > 1 then
-                                drillZone.Transparency = 0.5
-                            else
-                                drillZone.Transparency = 1 -- Hide it back when it's 1x
-                            end
-                        end
-                    end
-                end
+        -- Directly target the exact path to the DrillZone
+        local drillZone = workspace.Vehicles.ExaDrill.Body.DrillZone
+        
+        if drillZone and drillZone:IsA("BasePart") then
+            -- Save the original size securely the first time we touch it
+            if not drillZone:GetAttribute("OriginalSize") then
+                drillZone:SetAttribute("OriginalSize", drillZone.Size)
+            end
+            
+            local origSize = drillZone:GetAttribute("OriginalSize")
+            
+            -- Adjust the Size property directly
+            drillZone.Size = origSize * multi
+            
+            -- Make the Hitbox slightly transparent so you aren't blinded by a massive invisible block
+            if multi > 1 then
+                drillZone.Transparency = 0.5
+            else
+                drillZone.Transparency = 1 -- Hide it back when it's 1x
             end
         end
     end)
