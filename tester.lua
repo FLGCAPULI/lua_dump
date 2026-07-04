@@ -483,27 +483,33 @@ local function getVehicleCargoData()
     return isFull, cargoText
 end
 
--- OBSIDIAN SCANNER (AUTO C4)
-local function getNearestObsidian()
+-- RAYCAST OBSTACLE AVOIDANCE
+local function checkObstacleInFront()
     local hrp = getHRP()
-    if not hrp then return nil end
+    if not hrp then return false end
     
-    -- Efficiently scan a 25-stud radius around the player
-    local parts = workspace:GetPartBoundsInRadius(hrp.Position, 25)
-    local nearest = nil
-    local minDist = 26 -- Anything slightly over radius
+    local rayOrigin = hrp.Position
+    -- Cast a ray 200 studs forward
+    local rayDirection = hrp.CFrame.LookVector * 200
     
-    for _, part in ipairs(parts) do
-        if string.find(string.lower(part.Name), "obsidian") then
-            local dist = (part.Position - hrp.Position).Magnitude
-            if dist < minDist then
-                minDist = dist
-                nearest = part
-            end
+    local rayParams = RaycastParams.new()
+    -- Ignore the player and the vehicle they are in
+    local ignoreList = {player.Character}
+    if targetedVehicle then
+        table.insert(ignoreList, targetedVehicle)
+    end
+    rayParams.FilterDescendantsInstances = ignoreList
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local rayResult = workspace:Raycast(rayOrigin, rayDirection, rayParams)
+    
+    if rayResult and rayResult.Instance then
+        if string.find(string.lower(rayResult.Instance.Name), "obsidian") then
+            return true
         end
     end
     
-    return nearest
+    return false
 end
 
 -- ==========================================
@@ -562,48 +568,25 @@ local function mineFunc()
         end
         
         -- ====================================
-        -- AUTO C4 DEPLOYMENT
+        -- RAYCAST AVOIDANCE LOGIC
         -- ====================================
-        local obsidian = getNearestObsidian()
-        if obsidian then
-            lblStatus.Text = "Status: Obsidian! Deploying C4..."
-            releaseKey(Enum.KeyCode.W) -- Stop driving
-            safeWait(0.5)
+        if checkObstacleInFront() then
+            lblStatus.Text = "Status: Obsidian! Dodging..."
+            releaseKey(Enum.KeyCode.W) -- Stop driving forward
             
-            -- 1. Get out of vehicle (Space)
-            pressKey(Enum.KeyCode.Space, 0.1)
-            safeWait(1)
+            -- Steer right
+            holdKey(Enum.KeyCode.D) 
             
-            -- 2. Equip C4 (Press 2)
-            pressKey(Enum.KeyCode.Two, 0.1)
-            safeWait(0.5)
+            -- Keep turning until the raycast no longer detects obsidian
+            while isRunning and checkObstacleInFront() do
+                task.wait(0.1)
+            end
             
-            -- 3. Aim at Obsidian & Click
-            local cam = workspace.CurrentCamera
-            cam.CFrame = CFrame.new(cam.CFrame.Position, obsidian.Position)
-            safeWait(0.2)
-            
-            local screenPos, onScreen = cam:WorldToViewportPoint(obsidian.Position)
-            local clickX = onScreen and screenPos.X or (cam.ViewportSize.X / 2)
-            local clickY = onScreen and screenPos.Y or (cam.ViewportSize.Y / 2)
-            
-            -- Simulate Left Click
-            VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
-            task.wait(0.1)
-            VirtualInputManager:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
-            
-            lblStatus.Text = "Status: Waiting for explosion..."
-            safeWait(2.5) -- Wait a couple seconds for the blast to clear the block
-            
-            -- 4. Get back into vehicle (Press E)
-            pressKey(Enum.KeyCode.E, 0.1)
-            safeWait(1)
-            
-            -- 5. Unequip C4 / Swap back to tool 1
-            pressKey(Enum.KeyCode.One, 0.1)
+            -- Stop steering and resume driving
+            releaseKey(Enum.KeyCode.D) 
             
             lblStatus.Text = "Status: Mining..."
-            holdKey(Enum.KeyCode.W) -- Resume Driving
+            holdKey(Enum.KeyCode.W) 
         end
         -- ====================================
         
