@@ -109,7 +109,7 @@ local function createTabBtn(text, pos, widthStr)
     return btn
 end
 
--- 3 Tabs now (Main, Mods, Misc) spread evenly
+-- Tabs
 local btnTabMain = createTabBtn("Main", UDim2.new(0, 0, 0, 0), 0.334)
 local btnTabMods = createTabBtn("Mods", UDim2.new(0.334, 0, 0, 0), 0.333)
 local btnTabMisc = createTabBtn("Misc", UDim2.new(0.667, 0, 0, 0), 0.333)
@@ -158,8 +158,6 @@ local function createUIElement(className, parent, pos, text)
 end
 
 -- === MAIN TAB ELEMENTS ===
-
--- Vehicle Selector
 local lblTargetTitle = Instance.new("TextLabel", tabMain)
 lblTargetTitle.Size = UDim2.new(0.9, 0, 0, 20)
 lblTargetTitle.Position = UDim2.new(0.05, 0, 0, 5)
@@ -280,7 +278,6 @@ local vehicleList = {}
 local function getVehicleOwnerName(vehicle)
     if not vehicle then return "Unknown" end
     
-    -- Try to find owner from Attributes
     local ownerAttr = vehicle:GetAttribute("Owner") or vehicle:GetAttribute("Player") or vehicle:GetAttribute("Driver")
     if type(ownerAttr) == "string" and ownerAttr ~= "" then
         return ownerAttr
@@ -290,7 +287,6 @@ local function getVehicleOwnerName(vehicle)
         return tostring(ownerAttr)
     end
     
-    -- Try to find owner from Value objects
     local ownerVal = vehicle:FindFirstChild("Owner") or vehicle:FindFirstChild("Player") or vehicle:FindFirstChild("Driver")
     if ownerVal then
         if ownerVal:IsA("StringValue") and ownerVal.Value ~= "" then
@@ -300,7 +296,6 @@ local function getVehicleOwnerName(vehicle)
         end
     end
     
-    -- Try to find owner from VehicleSeat Occupant (Fallback)
     local seat = vehicle:FindFirstChildWhichIsA("VehicleSeat", true)
     if seat and seat.Occupant and seat.Occupant.Parent then
         return seat.Occupant.Parent.Name
@@ -354,9 +349,8 @@ task.spawn(function()
     task.wait(1)
     refreshVehicleList()
     if #vehicleList > 0 then
-        currentVehicleIndex = 1 -- Fallback to the first vehicle
+        currentVehicleIndex = 1 
         
-        -- Automatically search for and select the local player's vehicle
         for i, v in ipairs(vehicleList) do
             local ownerName = getVehicleOwnerName(v)
             if ownerName == player.Name or ownerName == tostring(player.UserId) then
@@ -483,33 +477,15 @@ local function getVehicleCargoData()
     return isFull, cargoText
 end
 
--- RAYCAST OBSTACLE AVOIDANCE
-local function checkObstacleInFront()
+-- VEHICLE POSITION SCANNER
+local function getVehiclePosition()
+    if targetedVehicle and targetedVehicle.Parent then
+        return targetedVehicle:GetPivot().Position
+    end
+    -- Fallback to player position if vehicle isn't locked
     local hrp = getHRP()
-    if not hrp then return false end
-    
-    local rayOrigin = hrp.Position
-    -- Cast a ray 200 studs forward
-    local rayDirection = hrp.CFrame.LookVector * 200
-    
-    local rayParams = RaycastParams.new()
-    -- Ignore the player and the vehicle they are in
-    local ignoreList = {player.Character}
-    if targetedVehicle then
-        table.insert(ignoreList, targetedVehicle)
-    end
-    rayParams.FilterDescendantsInstances = ignoreList
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    
-    local rayResult = workspace:Raycast(rayOrigin, rayDirection, rayParams)
-    
-    if rayResult and rayResult.Instance then
-        if string.find(string.lower(rayResult.Instance.Name), "obsidian") then
-            return true
-        end
-    end
-    
-    return false
+    if hrp then return hrp.Position end
+    return nil
 end
 
 -- ==========================================
@@ -558,6 +534,9 @@ local function mineFunc()
     
     holdKey(Enum.KeyCode.W)
     
+    local lastCheckTime = tick()
+    local lastPos = getVehiclePosition()
+    
     while isRunning do
         local isFull, cargoText = getVehicleCargoData()
         
@@ -567,38 +546,77 @@ local function mineFunc()
             lblCountdown.Text = "Cargo: Target missing!"
         end
         
-        -- ====================================
-        -- RAYCAST AVOIDANCE LOGIC
-        -- ====================================
-        if checkObstacleInFront() then
-            lblStatus.Text = "Status: Obsidian! Dodging..."
-            releaseKey(Enum.KeyCode.W) -- Stop driving forward
-            
-            -- Steer right
-            holdKey(Enum.KeyCode.D) 
-            
-            -- Keep turning until the raycast no longer detects obsidian
-            while isRunning and checkObstacleInFront() do
-                task.wait(0.1)
-            end
-            
-            -- Stop steering and resume driving
-            releaseKey(Enum.KeyCode.D) 
-            
-            lblStatus.Text = "Status: Mining..."
-            holdKey(Enum.KeyCode.W) 
-        end
-        -- ====================================
-        
-        safeWait(0.5) 
-        
         if forceUnloadTrigger or isFull then
             forceUnloadTrigger = false
             break
         end
+        
+        -- ====================================
+        -- STUCK DETECTION & EVASION LOGIC
+        -- ====================================
+        if tick() - lastCheckTime >= 2 then
+            local currentPos = getVehiclePosition()
+            if currentPos and lastPos then
+                local dist = (currentPos - lastPos).Magnitude
+                
+                -- If we moved less than 2 studs in 2 seconds, we are stuck!
+                if dist < 2.0 then
+                    lblStatus.Text = "Status: Stuck! Reversing..."
+                    releaseKey(Enum.KeyCode.W)
+                    
+                    -- 1. Reverse for 5 seconds
+                    holdKey(Enum.KeyCode.S)
+                    for _ = 1, 10 do -- 10 * 0.5s = 5 seconds
+                        safeWait(0.5)
+                        if not isRunning or forceUnloadTrigger then break end
+                    end
+                    releaseKey(Enum.KeyCode.S)
+                    
+                    if isRunning and not forceUnloadTrigger then
+                        lblStatus.Text = "Status: Dodging Obstacle..."
+                        
+                        -- 2. Turn D (Right) to change angle (~30 degrees)
+                        holdKey(Enum.KeyCode.D)
+                        holdKey(Enum.KeyCode.W)
+                        -- 0.8s is usually enough for a 30-degree rotation in Roblox cars, you can tweak this!
+                        safeWait(0.8) 
+                        releaseKey(Enum.KeyCode.D)
+                        
+                        -- 3. Drive forward for 10 seconds to bypass
+                        for _ = 1, 20 do -- 20 * 0.5s = 10 seconds
+                            safeWait(0.5)
+                            -- Continuously check cargo so we don't overfill during the 10s drive
+                            local currentIsFull, currentCargoText = getVehicleCargoData()
+                            if currentCargoText then lblCountdown.Text = "Cargo: " .. currentCargoText end
+                            if currentIsFull or forceUnloadTrigger or not isRunning then break end
+                        end
+                        
+                        -- 4. Turn A (Left) to correct the angle back to original
+                        if isRunning and not forceUnloadTrigger then
+                            lblStatus.Text = "Status: Correcting Angle..."
+                            holdKey(Enum.KeyCode.A)
+                            safeWait(0.8)
+                            releaseKey(Enum.KeyCode.A)
+                        end
+                        
+                        lblStatus.Text = "Status: Mining..."
+                    end
+                end
+            end
+            lastPos = currentPos
+            lastCheckTime = tick()
+        end
+        -- ====================================
+        
+        safeWait(0.5) 
     end
     
+    -- Safely release all movement keys just in case we broke out during a dodge
     releaseKey(Enum.KeyCode.W)
+    releaseKey(Enum.KeyCode.A)
+    releaseKey(Enum.KeyCode.S)
+    releaseKey(Enum.KeyCode.D)
+    
     if not isRunning then return end
     
     task.wait(0.1)
@@ -859,7 +877,9 @@ local function terminateScript()
     isRunning = false
     isPaused = false
     releaseKey(Enum.KeyCode.W)
+    releaseKey(Enum.KeyCode.A)
     releaseKey(Enum.KeyCode.S)
+    releaseKey(Enum.KeyCode.D)
     screenGui:Destroy()
     print("Script Terminated.")
 end
