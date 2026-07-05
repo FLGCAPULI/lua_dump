@@ -53,36 +53,6 @@ local _G = {
     }
 }
 
---// Load Orion GUI Library Safely
-local OrionLib
-
-local success, result = pcall(function()
-    -- Attempt 1: Official Source
-    return loadstring(game:HttpGet('https://raw.githubusercontent.com/shlexware/Orion/main/source'))()
-end)
-
-if success and result then
-    OrionLib = result
-    print("[Crystal Hub]: Loaded Orion from Official Source.")
-else
-    warn("[Crystal Hub]: Official Orion source failed. Trying backup mirror... Error: " .. tostring(result))
-    
-    local backupSuccess, backupResult = pcall(function()
-        -- Attempt 2: Backup Mirror (Mobile & Desktop friendly mirror)
-        return loadstring(game:HttpGet('https://raw.githubusercontent.com/thanhdat4461/OrionMoblie/main/source'))()
-    end)
-    
-    if backupSuccess and backupResult then
-        OrionLib = backupResult
-        print("[Crystal Hub]: Loaded Orion from Backup Source.")
-    else
-        error("[Crystal Hub]: Both GUI sources failed to load. Your executor might not support HttpGet, or your internet/ISP is blocking GitHub raw links.")
-        return -- Stop the script completely
-    end
-end
-
-local Window = OrionLib:MakeWindow({Name = "Crystal Mining Hub", HidePremium = false, SaveConfig = true, ConfigFolder = "CrystalHubConfig"})
-
 --// Utility Functions
 local function getHRP()
     local character = LocalPlayer.Character
@@ -353,129 +323,157 @@ task.spawn(function()
     end
 end)
 
+--// Native GUI Construction
+local safeParent = (gethui and gethui()) or game:GetService("CoreGui")
+if not pcall(function() local _ = safeParent.Name end) then safeParent = LocalPlayer:WaitForChild("PlayerGui") end
 
---// GUI Construction
-local MainTab = Window:MakeTab({Name = "Main", Icon = "rbxassetid://4483345998", PremiumOnly = false})
+-- Clean up old GUI if exists
+if safeParent:FindFirstChild("CrystalNativeHub") then
+    safeParent.CrystalNativeHub:Destroy()
+end
 
-MainTab:AddToggle({
-    Name = "Auto Farm Crystals",
-    Default = false,
-    Callback = function(Value)
-        _G.AutoFarm = Value
-    end
-})
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "CrystalNativeHub"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = safeParent
 
-MainTab:AddToggle({
-    Name = "Auto Sell (When Bag Full)",
-    Default = false,
-    Callback = function(Value)
-        _G.AutoSell = Value
-    end
-})
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 300, 0, 420)
+MainFrame.Position = UDim2.new(0.5, -150, 0.5, -210)
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true -- Built-in dragging
+MainFrame.Parent = ScreenGui
 
-MainTab:AddSlider({
-    Name = "Tween Speed",
-    Min = 10,
-    Max = 100,
-    Default = 30,
-    Color = Color3.fromRGB(255,255,255),
-    Increment = 1,
-    ValueName = "Studs/s",
-    Callback = function(Value)
-        _G.TweenSpeed = Value
-    end
-})
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
 
-MainTab:AddToggle({
-    Name = "Enable Aura Grab (Radius)",
-    Default = false,
-    Callback = function(Value)
-        _G.GrabRadiusEnabled = Value
-    end
-})
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.BackgroundTransparency = 1
+Title.Text = "Crystal Mining Hub"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 18
+Title.Font = Enum.Font.GothamBold
+Title.Parent = MainFrame
 
-MainTab:AddSlider({
-    Name = "Aura Grab Radius",
-    Min = 5,
-    Max = 50,
-    Default = 20,
-    Color = Color3.fromRGB(0,255,0),
-    Increment = 1,
-    ValueName = "Studs",
-    Callback = function(Value)
-        _G.GrabRadius = Value
-    end
-})
+local Container = Instance.new("ScrollingFrame")
+Container.Size = UDim2.new(1, -20, 1, -50)
+Container.Position = UDim2.new(0, 10, 0, 40)
+Container.BackgroundTransparency = 1
+Container.ScrollBarThickness = 4
+Container.Parent = MainFrame
 
-local FilterTab = Window:MakeTab({Name = "Filters & ESP", Icon = "rbxassetid://4483345998", PremiumOnly = false})
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.Padding = UDim.new(0, 8)
+UIListLayout.Parent = Container
 
-FilterTab:AddToggle({
-    Name = "Enable ESP",
-    Default = false,
-    Callback = function(Value)
-        _G.ESP = Value
-    end
-})
+local function createToggle(name, defaultState, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 30)
+    btn.BackgroundColor3 = defaultState and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(60, 60, 65)
+    btn.Text = name .. ": " .. (defaultState and "ON" or "OFF")
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.GothamSemibold
+    btn.TextSize = 14
+    btn.Parent = Container
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = btn
+    
+    local state = defaultState
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        btn.BackgroundColor3 = state and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(60, 60, 65)
+        btn.Text = name .. ": " .. (state and "ON" or "OFF")
+        callback(state)
+    end)
+end
 
-FilterTab:AddToggle({
-    Name = "Apply Filters to Actions",
-    Default = false,
-    Callback = function(Value)
-        _G.Filters.UseFilters = Value
-    end
-})
+local function createInput(name, defaultValue, isNumber, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 30)
+    frame.BackgroundTransparency = 1
+    frame.Parent = Container
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.6, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = name
+    label.TextColor3 = Color3.fromRGB(200, 200, 200)
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 14
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = frame
+    
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0.4, 0, 1, 0)
+    box.Position = UDim2.new(0.6, 0, 0, 0)
+    box.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+    box.TextColor3 = Color3.fromRGB(255, 255, 255)
+    box.Text = tostring(defaultValue)
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 14
+    box.Parent = frame
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = box
+    
+    box.FocusLost:Connect(function()
+        local val = box.Text
+        if isNumber then
+            val = tonumber(val) or defaultValue
+            box.Text = tostring(val)
+        end
+        callback(val)
+    end)
+end
 
-FilterTab:AddTextbox({
-    Name = "Crystal Name Filter",
-    Default = "",
-    TextDisappear = false,
-    Callback = function(Value)
-        _G.Filters.CrystalName = Value
-    end
-})
+local function createLabel(name)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 0, 20)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = name
+    lbl.TextColor3 = Color3.fromRGB(150, 200, 255)
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 14
+    lbl.Parent = Container
+    return lbl
+end
 
-FilterTab:AddSlider({
-    Name = "Minimum Tier",
-    Min = 0,
-    Max = 10,
-    Default = 0,
-    Color = Color3.fromRGB(255,0,0),
-    Increment = 1,
-    ValueName = "Tier",
-    Callback = function(Value)
-        _G.Filters.MinTier = Value
-    end
-})
+-- Populate GUI Elements
+createLabel("--- MAIN CONTROLS ---")
+createToggle("Auto Farm Crystals", _G.AutoFarm, function(v) _G.AutoFarm = v end)
+createToggle("Auto Sell (When Bag Full)", _G.AutoSell, function(v) _G.AutoSell = v end)
+createInput("Tween Speed", _G.TweenSpeed, true, function(v) _G.TweenSpeed = v end)
 
-FilterTab:AddSlider({
-    Name = "Minimum Size Class",
-    Min = 0,
-    Max = 10,
-    Default = 0,
-    Color = Color3.fromRGB(255,255,0),
-    Increment = 1,
-    ValueName = "Size",
-    Callback = function(Value)
-        _G.Filters.MinSizeClass = Value
-    end
-})
+createLabel("--- AURA GRAB ---")
+createToggle("Enable Aura Grab", _G.GrabRadiusEnabled, function(v) _G.GrabRadiusEnabled = v end)
+createInput("Grab Radius", _G.GrabRadius, true, function(v) _G.GrabRadius = v end)
 
-FilterTab:AddSlider({
-    Name = "Minimum Weight (kg)",
-    Min = 0,
-    Max = 1000,
-    Default = 0,
-    Color = Color3.fromRGB(0,0,255),
-    Increment = 5,
-    ValueName = "kg",
-    Callback = function(Value)
-        _G.Filters.MinWeightKg = Value
-    end
-})
+createLabel("--- FILTERS & ESP ---")
+createToggle("Enable ESP", _G.ESP, function(v) _G.ESP = v end)
+createToggle("Apply Filters", _G.Filters.UseFilters, function(v) _G.Filters.UseFilters = v end)
+createInput("Name Filter", _G.Filters.CrystalName, false, function(v) _G.Filters.CrystalName = v end)
+createInput("Min Tier", _G.Filters.MinTier, true, function(v) _G.Filters.MinTier = v end)
+createInput("Min Size", _G.Filters.MinSizeClass, true, function(v) _G.Filters.MinSizeClass = v end)
+createInput("Min Weight", _G.Filters.MinWeightKg, true, function(v) _G.Filters.MinWeightKg = v end)
 
-local StatsTab = Window:MakeTab({Name = "Live Stats", Icon = "rbxassetid://4483345998", PremiumOnly = false})
-local CashLabel = StatsTab:AddLabel("Cash: Loading...")
-local CarryLabel = StatsTab:AddLabel("Carry Weight: Loading...")
+createLabel("--- LIVE STATS ---")
+local CashLabel = createLabel("Cash: Loading...")
+local CarryLabel = createLabel("Capacity: Loading...")
+
+-- Auto-resize scrolling frame
+Container.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 20)
+UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    Container.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 20)
+end)
 
 -- Update Stats GUI loop
 task.spawn(function()
@@ -483,13 +481,11 @@ task.spawn(function()
         local RealStats = getRealStats()
         if RealStats then
             if RealStats:FindFirstChild("Cash") then
-                CashLabel:Set("Cash: $" .. tostring(RealStats.Cash.Value))
+                CashLabel.Text = "Cash: $" .. tostring(RealStats.Cash.Value)
             end
             if RealStats:FindFirstChild("CarryWeight") then
-                CarryLabel:Set("Carry Wght Capacity: " .. tostring(RealStats.CarryWeight.Value))
+                CarryLabel.Text = "Carry Wght Capacity: " .. tostring(RealStats.CarryWeight.Value)
             end
         end
     end
 end)
-
-OrionLib:Init()
