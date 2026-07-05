@@ -575,12 +575,17 @@ local function mineFunc()
                     if isRunning and not forceUnloadTrigger then
                         lblStatus.Text = "Status: Dodging Obstacle..."
                         
-                        -- 2. Turn D (Right) to change angle (~30 degrees)
-                        holdKey(Enum.KeyCode.D)
+                        -- Randomly pick a direction to prevent wall hugging
+                        local dodgeRight = math.random() > 0.5
+                        local turnKey = dodgeRight and Enum.KeyCode.D or Enum.KeyCode.A
+                        local counterKey = dodgeRight and Enum.KeyCode.A or Enum.KeyCode.D
+                        
+                        -- 2. Turn to change angle (~60 degrees)
+                        holdKey(turnKey)
                         holdKey(Enum.KeyCode.W)
-                        -- 0.8s is usually enough for a 30-degree rotation in Roblox cars, you can tweak this!
-                        safeWait(0.8) 
-                        releaseKey(Enum.KeyCode.D)
+                        -- 1.6s estimated for ~60 degrees (adjust if it turns too much or too little)
+                        safeWait(1.6) 
+                        releaseKey(turnKey)
                         
                         -- 3. Drive forward for 10 seconds to bypass
                         for _ = 1, 20 do -- 20 * 0.5s = 10 seconds
@@ -591,12 +596,12 @@ local function mineFunc()
                             if currentIsFull or forceUnloadTrigger or not isRunning then break end
                         end
                         
-                        -- 4. Turn A (Left) to correct the angle back to original
+                        -- 4. Turn opposite direction to correct the angle back to original
                         if isRunning and not forceUnloadTrigger then
                             lblStatus.Text = "Status: Correcting Angle..."
-                            holdKey(Enum.KeyCode.A)
-                            safeWait(0.8)
-                            releaseKey(Enum.KeyCode.A)
+                            holdKey(counterKey)
+                            safeWait(1.6)
+                            releaseKey(counterKey)
                         end
                         
                         lblStatus.Text = "Status: Mining..."
