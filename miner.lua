@@ -12,13 +12,26 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 
 --// Variables
 local LocalPlayer = Players.LocalPlayer
-local PlayerData = LocalPlayer:WaitForChild("PlayerData")
-local RealStats = PlayerData:WaitForChild("RealStats")
 
-local Things = Workspace:WaitForChild("Things")
-local CrystalsFolder = Things:WaitForChild("Crystals")
-local DroppedCrystals = Workspace:WaitForChild("DroppedCrystals")
-local SellProx = Things:WaitForChild("SellProx")
+-- Dynamic getters to prevent infinite yielding that stops the GUI from loading
+local function getRealStats()
+    local pd = LocalPlayer:FindFirstChild("PlayerData")
+    return pd and pd:FindFirstChild("RealStats")
+end
+
+local function getCrystalsFolder()
+    local things = Workspace:FindFirstChild("Things")
+    return things and things:FindFirstChild("Crystals")
+end
+
+local function getDroppedCrystalsFolder()
+    return Workspace:FindFirstChild("DroppedCrystals")
+end
+
+local function getSellProx()
+    local things = Workspace:FindFirstChild("Things")
+    return things and things:FindFirstChild("SellProx")
+end
 
 --// Configuration / State
 local _G = {
@@ -104,6 +117,9 @@ end
 
 -- Checks if the bag is full (Based on Player stats)
 local function isBagFull()
+    local RealStats = getRealStats()
+    if not RealStats then return false end
+    
     -- Depending on how the game structures it, it might compare CurrentWeight to CarryWeight
     -- Assuming a generic structure based on provided RealStats:
     local maxWeight = RealStats:FindFirstChild("CarryWeight") and RealStats.CarryWeight.Value or _G.MaxWeight
@@ -120,6 +136,9 @@ end
 
 -- Sell logic
 local function performSell()
+    local SellProx = getSellProx()
+    if not SellProx then return end
+    
     local prompt = SellProx:FindFirstChildWhichIsA("ProximityPrompt", true) -- True ensures recursive search
     if prompt then
         -- Safely grab CFrame whether SellProx is a Model or a Part
@@ -147,6 +166,7 @@ local function getNearestCrystal()
     local nearestCrystal = nil
     
     local function checkFolder(folder)
+        if not folder then return end
         for _, crystal in ipairs(folder:GetChildren()) do
             if crystal:IsA("Model") and crystal.PrimaryPart then
                 crystal = crystal.PrimaryPart
@@ -164,8 +184,8 @@ local function getNearestCrystal()
         end
     end
     
-    checkFolder(CrystalsFolder)
-    checkFolder(DroppedCrystals)
+    checkFolder(getCrystalsFolder())
+    checkFolder(getDroppedCrystalsFolder())
     
     return nearestCrystal
 end
@@ -218,6 +238,7 @@ task.spawn(function()
             local hrp = getHRP()
             if hrp then
                 local function grabFrom(folder)
+                    if not folder then return end
                     for _, crystal in ipairs(folder:GetChildren()) do
                         local part = crystal:IsA("Model") and crystal.PrimaryPart or crystal
                         if part and part:IsA("BasePart") then
@@ -231,8 +252,8 @@ task.spawn(function()
                         end
                     end
                 end
-                grabFrom(CrystalsFolder)
-                grabFrom(DroppedCrystals)
+                grabFrom(getCrystalsFolder())
+                grabFrom(getDroppedCrystalsFolder())
             end
         end
     end
@@ -252,6 +273,7 @@ task.spawn(function()
         end
         
         local function createESP(folder)
+            if not folder then return end
             for _, crystal in ipairs(folder:GetChildren()) do
                 local part = crystal:IsA("Model") and crystal.PrimaryPart or crystal
                 if part and part:IsA("BasePart") then
@@ -292,8 +314,8 @@ task.spawn(function()
             end
         end
         
-        createESP(CrystalsFolder)
-        createESP(DroppedCrystals)
+        createESP(getCrystalsFolder())
+        createESP(getDroppedCrystalsFolder())
         
         -- Clean up nil objects
         for part, gui in pairs(ESPObjects) do
@@ -432,11 +454,14 @@ local CarryLabel = StatsTab:AddLabel("Carry Weight: Loading...")
 -- Update Stats GUI loop
 task.spawn(function()
     while task.wait(1) do
-        if RealStats:FindFirstChild("Cash") then
-            CashLabel:Set("Cash: $" .. tostring(RealStats.Cash.Value))
-        end
-        if RealStats:FindFirstChild("CarryWeight") then
-            CarryLabel:Set("Carry Wght Capacity: " .. tostring(RealStats.CarryWeight.Value))
+        local RealStats = getRealStats()
+        if RealStats then
+            if RealStats:FindFirstChild("Cash") then
+                CashLabel:Set("Cash: $" .. tostring(RealStats.Cash.Value))
+            end
+            if RealStats:FindFirstChild("CarryWeight") then
+                CarryLabel:Set("Carry Wght Capacity: " .. tostring(RealStats.CarryWeight.Value))
+            end
         end
     end
 end)
