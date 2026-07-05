@@ -65,6 +65,7 @@ local _G = {
     Filters = {
         ApplyToFarm = false,
         ApplyToESP = false,
+        ApplyToAura = false,
         MinValue = 0,
         MinWeightKg = 0,
         MinTier = 0
@@ -113,9 +114,10 @@ local function firePrompt(prompt)
 end
 
 -- Checks if a crystal passes the current GUI filters
-local function passesFilter(crystal, forFarm)
-    if forFarm and not _G.Filters.ApplyToFarm then return true end
-    if not forFarm and not _G.Filters.ApplyToESP then return true end
+local function passesFilter(crystal, context)
+    if context == "Farm" and not _G.Filters.ApplyToFarm then return true end
+    if context == "ESP" and not _G.Filters.ApplyToESP then return true end
+    if context == "Aura" and not _G.Filters.ApplyToAura then return true end
     
     local valueAttr = crystal:GetAttribute("Value") or 0
     local weightAttr = crystal:GetAttribute("weightkg") or 0
@@ -194,7 +196,7 @@ local function getNearestCrystal()
             end
             
             if crystal:IsA("BasePart") and crystal:FindFirstChildOfClass("ProximityPrompt") then
-                if passesFilter(crystal, true) then
+                if passesFilter(crystal, "Farm") then
                     local dist = (hrp.Position - crystal.Position).Magnitude
                     if dist < nearestDist then
                         nearestDist = dist
@@ -302,7 +304,7 @@ task.spawn(function()
                         local part = crystal:IsA("Model") and crystal.PrimaryPart or crystal
                         if part and part:IsA("BasePart") then
                             local prompt = part:FindFirstChildOfClass("ProximityPrompt")
-                            if prompt and passesFilter(part, true) then
+                            if prompt and passesFilter(part, "Aura") then
                                 local dist = (hrp.Position - part.Position).Magnitude
                                 if dist <= _G.GrabRadius then
                                     firePrompt(prompt)
@@ -335,7 +337,7 @@ task.spawn(function()
             for _, crystal in ipairs(folder:GetChildren()) do
                 local part = crystal:IsA("Model") and crystal.PrimaryPart or crystal
                 if part and part:IsA("BasePart") then
-                    if passesFilter(part, false) then
+                    if passesFilter(part, "ESP") then
                         if not ESPObjects[part] then
                             local billboard = Instance.new("BillboardGui")
                             billboard.Name = "CrystalESP"
@@ -672,6 +674,7 @@ local TabFilter = CreateTab("Filters & ESP")
 CreateToggle(TabFilter, "Enable Visual ESP", _G.ESP, function(v) _G.ESP = v end)
 CreateToggle(TabFilter, "Apply Filters to Farm", _G.Filters.ApplyToFarm, function(v) _G.Filters.ApplyToFarm = v end)
 CreateToggle(TabFilter, "Apply Filters to ESP", _G.Filters.ApplyToESP, function(v) _G.Filters.ApplyToESP = v end)
+CreateToggle(TabFilter, "Apply Filters to Aura Grab", _G.Filters.ApplyToAura, function(v) _G.Filters.ApplyToAura = v end)
 CreateInput(TabFilter, "Min Value", _G.Filters.MinValue, true, function(v) _G.Filters.MinValue = v end)
 CreateInput(TabFilter, "Min Tier", _G.Filters.MinTier, true, function(v) _G.Filters.MinTier = v end)
 CreateInput(TabFilter, "Min Weight", _G.Filters.MinWeightKg, true, function(v) _G.Filters.MinWeightKg = v end)
