@@ -42,6 +42,7 @@ local _G = {
     AutoSell = false,
     ESP = false,
     GrabRadiusEnabled = false,
+    PreventOverweight = true, -- Prevents grabbing ores heavier than remaining capacity
     GrabRadius = 20,
     TweenSpeed = 30, -- Studs per second
     MaxWeight = 100, -- Fallback value
@@ -61,20 +62,25 @@ local _G = {
         ColorB = 255
     },
     
-    -- Filters
+    -- Separate Filters for each system
     Filters = {
-        ApplyToFarm = false,
-        ApplyToESP = false,
-        ApplyToAura = false,
-        MinValue = 0,
-        MinWeightKg = 0,
-        Tiers = {
-            Mythic = true,
-            Legendary = true,
-            Epic = true,
-            Rare = true,
-            Uncommon = true,
-            Common = true
+        Farm = {
+            Apply = false,
+            MinValue = 0,
+            MinWeightKg = 0,
+            Tiers = { Mythic = true, Legendary = true, Epic = true, Rare = true, Uncommon = true, Common = true }
+        },
+        ESP = {
+            Apply = false,
+            MinValue = 0,
+            MinWeightKg = 0,
+            Tiers = { Mythic = true, Legendary = true, Epic = true, Rare = true, Uncommon = true, Common = true }
+        },
+        Aura = {
+            Apply = false,
+            MinValue = 0,
+            MinWeightKg = 0,
+            Tiers = { Mythic = true, Legendary = true, Epic = true, Rare = true, Uncommon = true, Common = true }
         }
     }
 }
@@ -122,19 +128,19 @@ end
 
 -- Checks if a crystal passes the current GUI filters
 local function passesFilter(crystal, context)
-    if context == "Farm" and not _G.Filters.ApplyToFarm then return true end
-    if context == "ESP" and not _G.Filters.ApplyToESP then return true end
-    if context == "Aura" and not _G.Filters.ApplyToAura then return true end
+    local filterConfig = _G.Filters[context]
+    if not filterConfig then return true end
+    if not filterConfig.Apply then return true end
     
     local valueAttr = crystal:GetAttribute("Value") or 0
     local weightAttr = crystal:GetAttribute("weightkg") or 0
     local tierAttr = crystal:GetAttribute("TierName") or "Unknown"
 
-    if tonumber(valueAttr) < _G.Filters.MinValue then return false end
-    if tonumber(weightAttr) < _G.Filters.MinWeightKg then return false end
+    if tonumber(valueAttr) < filterConfig.MinValue then return false end
+    if tonumber(weightAttr) < filterConfig.MinWeightKg then return false end
     
     -- Check if the specific TierName is allowed in the filter list
-    if _G.Filters.Tiers[tierAttr] == false then return false end
+    if filterConfig.Tiers[tierAttr] == false then return false end
 
     return true
 end
@@ -166,6 +172,17 @@ local function isBagFull()
         return true
     end
     return false
+end
+
+-- Checks if the bag has enough space for a specific weight
+local function canCarry(weightToAdd)
+    local RealStats = getRealStats()
+    if not RealStats then return true end
+    
+    local maxWeight = RealStats:FindFirstChild("CarryWeight") and RealStats.CarryWeight.Value or _G.MaxWeight
+    local currentWeight = RealStats:FindFirstChild("CurrentWeight") and RealStats.CurrentWeight.Value or 0 
+    
+    return (currentWeight + weightToAdd) <= maxWeight
 end
 
 -- Sell logic
@@ -314,9 +331,14 @@ task.spawn(function()
                         if part and part:IsA("BasePart") then
                             local prompt = part:FindFirstChildOfClass("ProximityPrompt")
                             if prompt and passesFilter(part, "Aura") then
-                                local dist = (hrp.Position - part.Position).Magnitude
-                                if dist <= _G.GrabRadius then
-                                    firePrompt(prompt)
+                                local weight = tonumber(part:GetAttribute("weightkg")) or 0
+                                
+                                -- Verify weight capacity before grabbing
+                                if not _G.PreventOverweight or canCarry(weight) then
+                                    local dist = (hrp.Position - part.Position).Magnitude
+                                    if dist <= _G.GrabRadius then
+                                        firePrompt(prompt)
+                                    end
                                 end
                             end
                         end
@@ -761,35 +783,42 @@ CreateToggle(TabLocal, "Infinite Jump", _G.InfJump, function(v) _G.InfJump = v e
 CreateToggle(TabLocal, "Enable WalkSpeed", _G.SpeedEnabled, function(v) _G.SpeedEnabled = v end)
 CreateInput(TabLocal, "Player WalkSpeed", _G.PlayerSpeed, true, function(v) _G.PlayerSpeed = v end)
 
-local TabAura = CreateTab("Aura Grab")
-CreateToggle(TabAura, "Enable Aura Grab", _G.GrabRadiusEnabled, function(v) _G.GrabRadiusEnabled = v end)
-CreateInput(TabAura, "Grab Radius", _G.GrabRadius, true, function(v) _G.GrabRadius = v end)
-
-local TabFilter = CreateTab("Filters & ESP")
-CreateToggle(TabFilter, "Enable Visual ESP", _G.ESP, function(v) _G.ESP = v end)
-CreateToggle(TabFilter, "Apply Filters to Farm", _G.Filters.ApplyToFarm, function(v) _G.Filters.ApplyToFarm = v end)
-CreateToggle(TabFilter, "Apply Filters to ESP", _G.Filters.ApplyToESP, function(v) _G.Filters.ApplyToESP = v end)
-CreateToggle(TabFilter, "Apply Filters to Aura Grab", _G.Filters.ApplyToAura, function(v) _G.Filters.ApplyToAura = v end)
-CreateInput(TabFilter, "Min Value", _G.Filters.MinValue, true, function(v) _G.Filters.MinValue = v end)
-CreateInput(TabFilter, "Min Weight", _G.Filters.MinWeightKg, true, function(v) _G.Filters.MinWeightKg = v end)
-
--- Added Dropdown list for Tier filtering
-CreateMultiDropdown(TabFilter, "Filter by Tiers", _G.Filters.Tiers, {
-    "Mythic",
-    "Legendary",
-    "Epic",
-    "Rare",
-    "Uncommon",
-    "Common"
+local TabFarmFilter = CreateTab("Farm Filters")
+CreateToggle(TabFarmFilter, "Apply Filters to Farm", _G.Filters.Farm.Apply, function(v) _G.Filters.Farm.Apply = v end)
+CreateInput(TabFarmFilter, "Min Value", _G.Filters.Farm.MinValue, true, function(v) _G.Filters.Farm.MinValue = v end)
+CreateInput(TabFarmFilter, "Min Weight", _G.Filters.Farm.MinWeightKg, true, function(v) _G.Filters.Farm.MinWeightKg = v end)
+CreateMultiDropdown(TabFarmFilter, "Filter by Tiers", _G.Filters.Farm.Tiers, {
+    "Mythic", "Legendary", "Epic", "Rare", "Uncommon", "Common"
 })
 
-local TabVisuals = CreateTab("ESP Visuals")
-CreateToggle(TabVisuals, "Show Crystal Value", _G.ESPConfig.ShowValue, function(v) _G.ESPConfig.ShowValue = v end)
-CreateToggle(TabVisuals, "Show Crystal Tier", _G.ESPConfig.ShowTier, function(v) _G.ESPConfig.ShowTier = v end)
-CreateInput(TabVisuals, "Text Size", _G.ESPConfig.TextSize, true, function(v) _G.ESPConfig.TextSize = v end)
-CreateInput(TabVisuals, "Color: Red (0-255)", _G.ESPConfig.ColorR, true, function(v) _G.ESPConfig.ColorR = math.clamp(v, 0, 255) end)
-CreateInput(TabVisuals, "Color: Green (0-255)", _G.ESPConfig.ColorG, true, function(v) _G.ESPConfig.ColorG = math.clamp(v, 0, 255) end)
-CreateInput(TabVisuals, "Color: Blue (0-255)", _G.ESPConfig.ColorB, true, function(v) _G.ESPConfig.ColorB = math.clamp(v, 0, 255) end)
+local TabAura = CreateTab("Aura Settings")
+CreateToggle(TabAura, "Enable Aura Grab", _G.GrabRadiusEnabled, function(v) _G.GrabRadiusEnabled = v end)
+CreateToggle(TabAura, "Prevent Overweight Grabs", _G.PreventOverweight, function(v) _G.PreventOverweight = v end)
+CreateInput(TabAura, "Grab Radius", _G.GrabRadius, true, function(v) _G.GrabRadius = v end)
+CreateLabel(TabAura, "--- Aura Filters ---")
+CreateToggle(TabAura, "Apply Filters to Aura", _G.Filters.Aura.Apply, function(v) _G.Filters.Aura.Apply = v end)
+CreateInput(TabAura, "Min Value", _G.Filters.Aura.MinValue, true, function(v) _G.Filters.Aura.MinValue = v end)
+CreateInput(TabAura, "Min Weight", _G.Filters.Aura.MinWeightKg, true, function(v) _G.Filters.Aura.MinWeightKg = v end)
+CreateMultiDropdown(TabAura, "Filter by Tiers", _G.Filters.Aura.Tiers, {
+    "Mythic", "Legendary", "Epic", "Rare", "Uncommon", "Common"
+})
+
+local TabESP = CreateTab("ESP Settings")
+CreateToggle(TabESP, "Enable Visual ESP", _G.ESP, function(v) _G.ESP = v end)
+CreateLabel(TabESP, "--- ESP Filters ---")
+CreateToggle(TabESP, "Apply Filters to ESP", _G.Filters.ESP.Apply, function(v) _G.Filters.ESP.Apply = v end)
+CreateInput(TabESP, "Min Value", _G.Filters.ESP.MinValue, true, function(v) _G.Filters.ESP.MinValue = v end)
+CreateInput(TabESP, "Min Weight", _G.Filters.ESP.MinWeightKg, true, function(v) _G.Filters.ESP.MinWeightKg = v end)
+CreateMultiDropdown(TabESP, "Filter by Tiers", _G.Filters.ESP.Tiers, {
+    "Mythic", "Legendary", "Epic", "Rare", "Uncommon", "Common"
+})
+CreateLabel(TabESP, "--- ESP Visuals ---")
+CreateToggle(TabESP, "Show Crystal Value", _G.ESPConfig.ShowValue, function(v) _G.ESPConfig.ShowValue = v end)
+CreateToggle(TabESP, "Show Crystal Tier", _G.ESPConfig.ShowTier, function(v) _G.ESPConfig.ShowTier = v end)
+CreateInput(TabESP, "Text Size", _G.ESPConfig.TextSize, true, function(v) _G.ESPConfig.TextSize = v end)
+CreateInput(TabESP, "Color: Red (0-255)", _G.ESPConfig.ColorR, true, function(v) _G.ESPConfig.ColorR = math.clamp(v, 0, 255) end)
+CreateInput(TabESP, "Color: Green (0-255)", _G.ESPConfig.ColorG, true, function(v) _G.ESPConfig.ColorG = math.clamp(v, 0, 255) end)
+CreateInput(TabESP, "Color: Blue (0-255)", _G.ESPConfig.ColorB, true, function(v) _G.ESPConfig.ColorB = math.clamp(v, 0, 255) end)
 
 local TabStats = CreateTab("Live Stats")
 local CashLabel = CreateLabel(TabStats, "Cash: Loading...")
