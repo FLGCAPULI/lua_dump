@@ -507,6 +507,20 @@ local function getVehicleCargoData()
     return isFull, cargoText
 end
 
+-- HELPER TO GET TRUE FORWARD VECTOR
+local function getTrueVehicleLookVector()
+    if targetedVehicle and targetedVehicle.Parent then
+        -- Find the seat you drive from, as it is always forced to point to the true "forward"
+        local seat = targetedVehicle:FindFirstChildWhichIsA("VehicleSeat", true)
+        if seat then
+            return seat.CFrame.LookVector
+        end
+        -- Fallback if no vehicle seat is found
+        return targetedVehicle:GetPivot().LookVector
+    end
+    return Vector3.new(0, 0, -1)
+end
+
 -- VEHICLE POSITION SCANNER
 local function getVehiclePosition()
     if targetedVehicle and targetedVehicle.Parent then
@@ -520,14 +534,11 @@ end
 
 -- VEHICLE HEADING COMPASS
 local function getVehicleHeading()
-    if targetedVehicle and targetedVehicle.Parent then
-        local lv = targetedVehicle:GetPivot().LookVector
-        -- Calculate yaw angle in degrees (0 to 360)
-        local deg = math.deg(math.atan2(lv.X, -lv.Z))
-        if deg < 0 then deg = deg + 360 end
-        return deg
-    end
-    return 0
+    local lv = getTrueVehicleLookVector()
+    -- Calculate yaw angle in degrees (0 to 360)
+    local deg = math.deg(math.atan2(lv.X, -lv.Z))
+    if deg < 0 then deg = deg + 360 end
+    return deg
 end
 
 local function getShortestAngle(target, current)
@@ -539,8 +550,7 @@ end
 local function alignCameraWithVehicle()
     local camera = workspace.CurrentCamera
     if targetedVehicle and targetedVehicle.Parent and camera then
-        local vehiclePivot = targetedVehicle:GetPivot()
-        local lookDir = vehiclePivot.LookVector
+        local lookDir = getTrueVehicleLookVector()
         
         -- Flatten the Y axis so the camera doesn't look straight into the ground or sky
         local flatLookDir = Vector3.new(lookDir.X, 0, lookDir.Z)
