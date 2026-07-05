@@ -267,6 +267,24 @@ btnToggleEvasion.MouseButton1Click:Connect(function()
     end
 end)
 
+-- === NEW: CAMERA/COMPASS OFFSET ===
+local lblFrontOffset = Instance.new("TextLabel", tabMods)
+lblFrontOffset.Size = UDim2.new(0.9, 0, 0, 20)
+lblFrontOffset.Position = UDim2.new(0.05, 0, 0, 170)
+lblFrontOffset.Text = "Vehicle Front Offset (Deg):"
+lblFrontOffset.TextColor3 = Theme.Text
+lblFrontOffset.Font = Enum.Font.Code
+lblFrontOffset.BackgroundTransparency = 1
+lblFrontOffset.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Changed default from -90 to 90 (if -90 looked left, 90 or 0 should look front!)
+local txtFrontOffset = createUIElement("TextBox", tabMods, UDim2.new(0.05, 0, 0, 190), "90")
+txtFrontOffset.PlaceholderText = "90"
+txtFrontOffset.ClearTextOnFocus = false
+
+local btnTestCam = createUIElement("TextButton", tabMods, UDim2.new(0.05, 0, 0, 230), "Test Camera Alignment")
+btnTestCam.BackgroundColor3 = Color3.fromRGB(100, 100, 150)
+
 -- === MISC TAB ELEMENTS ===
 local btnTpPlot = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 15), "TP to Plot")
 local btnExplode = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 50), "Spawn Explosion")
@@ -298,6 +316,16 @@ end
 btnTabMain.MouseButton1Click:Connect(function() switchTab("Main") end)
 btnTabMods.MouseButton1Click:Connect(function() switchTab("Mods") end)
 btnTabMisc.MouseButton1Click:Connect(function() switchTab("Misc") end)
+
+-- Wire up the test button so you can calibrate without waiting for the macro
+btnTestCam.MouseButton1Click:Connect(function()
+    if targetedVehicle then
+        alignCameraWithVehicle()
+        lblStatus.Text = "Status: Camera Tested!"
+    else
+        lblStatus.Text = "Status: Select a vehicle first!"
+    end
+end)
 
 -- ==========================================
 -- 2. Vehicle Selector Logic
@@ -507,18 +535,33 @@ local function getVehicleCargoData()
     return isFull, cargoText
 end
 
--- HELPER TO GET TRUE FORWARD VECTOR
+-- HELPER TO GET TRUE FORWARD VECTOR (WITH OFFSET FIX)
 local function getTrueVehicleLookVector()
+    local baseVector = Vector3.new(0, 0, -1)
+    
     if targetedVehicle and targetedVehicle.Parent then
-        -- Find the seat you drive from, as it is always forced to point to the true "forward"
         local seat = targetedVehicle:FindFirstChildWhichIsA("VehicleSeat", true)
         if seat then
-            return seat.CFrame.LookVector
+            baseVector = seat.CFrame.LookVector
+        else
+            baseVector = targetedVehicle:GetPivot().LookVector
         end
-        -- Fallback if no vehicle seat is found
-        return targetedVehicle:GetPivot().LookVector
     end
-    return Vector3.new(0, 0, -1)
+    
+    -- Apply Rotation Offset to fix sideway vehicles
+    local offsetDeg = tonumber(txtFrontOffset.Text) or 0
+    if offsetDeg ~= 0 then
+        local rad = math.rad(offsetDeg)
+        local cosT = math.cos(rad)
+        local sinT = math.sin(rad)
+        
+        -- Rotate vector around the Y axis
+        local rx = baseVector.X * cosT - baseVector.Z * sinT
+        local rz = baseVector.X * sinT + baseVector.Z * cosT
+        baseVector = Vector3.new(rx, baseVector.Y, rz).Unit
+    end
+    
+    return baseVector
 end
 
 -- VEHICLE POSITION SCANNER
