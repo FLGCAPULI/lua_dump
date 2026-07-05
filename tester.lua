@@ -237,6 +237,36 @@ local txtWalkSpeed = createUIElement("TextBox", tabMods, UDim2.new(0.05, 0, 0, 3
 txtWalkSpeed.PlaceholderText = "16"
 txtWalkSpeed.ClearTextOnFocus = false
 
+-- === NEW: EVASION TOGGLE & SETTINGS ===
+local evasionEnabled = true
+
+local btnToggleEvasion = createUIElement("TextButton", tabMods, UDim2.new(0.05, 0, 0, 70), "Auto-Evasion: ON")
+btnToggleEvasion.BackgroundColor3 = Color3.fromRGB(100, 150, 100)
+
+local lblEvasionAngle = Instance.new("TextLabel", tabMods)
+lblEvasionAngle.Size = UDim2.new(0.9, 0, 0, 20)
+lblEvasionAngle.Position = UDim2.new(0.05, 0, 0, 110)
+lblEvasionAngle.Text = "Evasion Angle (Deg):"
+lblEvasionAngle.TextColor3 = Theme.Text
+lblEvasionAngle.Font = Enum.Font.Code
+lblEvasionAngle.BackgroundTransparency = 1
+lblEvasionAngle.TextXAlignment = Enum.TextXAlignment.Left
+
+local txtEvasionAngle = createUIElement("TextBox", tabMods, UDim2.new(0.05, 0, 0, 130), "60")
+txtEvasionAngle.PlaceholderText = "60"
+txtEvasionAngle.ClearTextOnFocus = false
+
+btnToggleEvasion.MouseButton1Click:Connect(function()
+    evasionEnabled = not evasionEnabled
+    if evasionEnabled then
+        btnToggleEvasion.Text = "Auto-Evasion: ON"
+        btnToggleEvasion.BackgroundColor3 = Color3.fromRGB(100, 150, 100)
+    else
+        btnToggleEvasion.Text = "Auto-Evasion: OFF"
+        btnToggleEvasion.BackgroundColor3 = Theme.Button
+    end
+end)
+
 -- === MISC TAB ELEMENTS ===
 local btnTpPlot = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 15), "TP to Plot")
 local btnExplode = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 50), "Spawn Explosion")
@@ -488,6 +518,41 @@ local function getVehiclePosition()
     return nil
 end
 
+-- VEHICLE HEADING COMPASS
+local function getVehicleHeading()
+    if targetedVehicle and targetedVehicle.Parent then
+        local lv = targetedVehicle:GetPivot().LookVector
+        -- Calculate yaw angle in degrees (0 to 360)
+        local deg = math.deg(math.atan2(lv.X, -lv.Z))
+        if deg < 0 then deg = deg + 360 end
+        return deg
+    end
+    return 0
+end
+
+local function getShortestAngle(target, current)
+    -- Returns the shortest difference between two angles (-180 to 180)
+    return (target - current + 180) % 360 - 180
+end
+
+-- CAMERA ALIGNMENT SENSOR
+local function alignCameraWithVehicle()
+    local camera = workspace.CurrentCamera
+    if targetedVehicle and targetedVehicle.Parent and camera then
+        local vehiclePivot = targetedVehicle:GetPivot()
+        local lookDir = vehiclePivot.LookVector
+        
+        -- Flatten the Y axis so the camera doesn't look straight into the ground or sky
+        local flatLookDir = Vector3.new(lookDir.X, 0, lookDir.Z)
+        if flatLookDir.Magnitude > 0.001 then
+            flatLookDir = flatLookDir.Unit
+            camera.CFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + flatLookDir)
+        else
+            camera.CFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + lookDir)
+        end
+    end
+end
+
 -- ==========================================
 -- 4. Core Logic Functions
 -- ==========================================
@@ -496,6 +561,10 @@ local function unloadFunc()
     
     lblStatus.Text = "Status: Unloading..."
     lblCountdown.Text = "Cargo: N/A"
+    
+    -- Align camera before starting the unload sequence
+    alignCameraWithVehicle()
+    task.wait(0.1)
     
     pressKey(Enum.KeyCode.E, 0.1)
     safeWait(0.28)
@@ -554,15 +623,19 @@ local function mineFunc()
         -- ====================================
         -- STUCK DETECTION & EVASION LOGIC
         -- ====================================
-        if tick() - lastCheckTime >= 2 then
+        if evasionEnabled and tick() - lastCheckTime >= 2 then
             local currentPos = getVehiclePosition()
             if currentPos and lastPos then
                 local dist = (currentPos - lastPos).Magnitude
                 
                 -- If we moved less than 2 studs in 2 seconds, we are stuck!
                 if dist < 2.0 then
+                    local dodgeAngle = tonumber(txtEvasionAngle.Text) or 60
                     lblStatus.Text = "Status: Stuck! Reversing..."
                     releaseKey(Enum.KeyCode.W)
+                    
+                    -- Record original heading before evasion
+                    local originalHeading = getVehicleHeading()
                     
                     -- 1. Reverse for 5 seconds
                     holdKey(Enum.KeyCode.S)
@@ -580,31 +653,55 @@ local function mineFunc()
                         local turnKey = dodgeRight and Enum.KeyCode.D or Enum.KeyCode.A
                         local counterKey = dodgeRight and Enum.KeyCode.A or Enum.KeyCode.D
                         
-                        -- 2. Turn to change angle (~60 degrees)
+                        -- Target heading offset by our 60 degrees (or configured setting)
+                        local targetHeading = (originalHeading + (dodgeRight and dodgeAngle or -dodgeAngle)) % 360
+                        
+                        -- 2. Turn to target angle (using compass)
                         holdKey(turnKey)
                         holdKey(Enum.KeyCode.W)
-                        -- 1.6s estimated for ~60 degrees (adjust if it turns too much or too little)
-                        safeWait(1.6) 
+                        local turnStart = tick()
+                        while isRunning and not forceUnloadTrigger and (tick() - turnStart < 5) do -- 5s safety timeout
+                            local currentHeading = getVehicleHeading()
+                            local diff = math.abs(getShortestAngle(targetHeading, currentHeading))
+                            if diff <= 10 then -- Stop when within 10 degrees of target
+                                break
+                            end
+                            task.wait(0.1)
+                        end
                         releaseKey(turnKey)
                         
                         -- 3. Drive forward for 10 seconds to bypass
+                        local brokeEarly = false
                         for _ = 1, 20 do -- 20 * 0.5s = 10 seconds
                             safeWait(0.5)
                             -- Continuously check cargo so we don't overfill during the 10s drive
                             local currentIsFull, currentCargoText = getVehicleCargoData()
                             if currentCargoText then lblCountdown.Text = "Cargo: " .. currentCargoText end
-                            if currentIsFull or forceUnloadTrigger or not isRunning then break end
+                            if currentIsFull or forceUnloadTrigger or not isRunning then 
+                                brokeEarly = true
+                                break 
+                            end
                         end
                         
                         -- 4. Turn opposite direction to correct the angle back to original
-                        if isRunning and not forceUnloadTrigger then
+                        if isRunning and not forceUnloadTrigger and not brokeEarly then
                             lblStatus.Text = "Status: Correcting Angle..."
                             holdKey(counterKey)
-                            safeWait(1.6)
+                            holdKey(Enum.KeyCode.W)
+                            local correctStart = tick()
+                            while isRunning and not forceUnloadTrigger and (tick() - correctStart < 5) do
+                                local currentHeading = getVehicleHeading()
+                                local diff = math.abs(getShortestAngle(originalHeading, currentHeading))
+                                if diff <= 10 then -- Stop when within 10 degrees of original heading
+                                    break
+                                end
+                                task.wait(0.1)
+                            end
                             releaseKey(counterKey)
                         end
                         
                         lblStatus.Text = "Status: Mining..."
+                        holdKey(Enum.KeyCode.W) -- Re-ensure W is held
                     end
                 end
             end
@@ -624,6 +721,10 @@ local function mineFunc()
     
     if not isRunning then return end
     
+    task.wait(0.1)
+    
+    -- Make sure camera is aligned with vehicle before exiting
+    alignCameraWithVehicle()
     task.wait(0.1)
     
     lblStatus.Text = "Status: Exiting Vehicle..."
