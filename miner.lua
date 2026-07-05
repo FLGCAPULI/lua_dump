@@ -133,7 +133,7 @@ local function passesFilter(crystal, context)
     if not filterConfig.Apply then return true end
     
     local valueAttr = crystal:GetAttribute("Value") or 0
-    local weightAttr = crystal:GetAttribute("weightkg") or 0
+    local weightAttr = crystal:GetAttribute("WeightKg") or 0
     local tierAttr = crystal:GetAttribute("TierName") or "Unknown"
 
     if tonumber(valueAttr) < filterConfig.MinValue then return false end
@@ -331,7 +331,7 @@ task.spawn(function()
                         if part and part:IsA("BasePart") then
                             local prompt = part:FindFirstChildOfClass("ProximityPrompt")
                             if prompt and passesFilter(part, "Aura") then
-                                local weight = tonumber(part:GetAttribute("weightkg")) or 0
+                                local weight = tonumber(part:GetAttribute("WeightKg")) or 0
                                 
                                 -- Verify weight capacity before grabbing
                                 if not _G.PreventOverweight or canCarry(weight) then
