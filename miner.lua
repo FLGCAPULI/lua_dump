@@ -53,8 +53,34 @@ local _G = {
     }
 }
 
---// Load Orion GUI Library
-local OrionLib = loadstring(game:HttpGet(('https://raw.githubusercontent.com/shlexware/Orion/main/source')))()
+--// Load Orion GUI Library Safely
+local OrionLib
+
+local success, result = pcall(function()
+    -- Attempt 1: Official Source
+    return loadstring(game:HttpGet('https://raw.githubusercontent.com/shlexware/Orion/main/source'))()
+end)
+
+if success and result then
+    OrionLib = result
+    print("[Crystal Hub]: Loaded Orion from Official Source.")
+else
+    warn("[Crystal Hub]: Official Orion source failed. Trying backup mirror... Error: " .. tostring(result))
+    
+    local backupSuccess, backupResult = pcall(function()
+        -- Attempt 2: Backup Mirror (Mobile & Desktop friendly mirror)
+        return loadstring(game:HttpGet('https://raw.githubusercontent.com/thanhdat4461/OrionMoblie/main/source'))()
+    end)
+    
+    if backupSuccess and backupResult then
+        OrionLib = backupResult
+        print("[Crystal Hub]: Loaded Orion from Backup Source.")
+    else
+        error("[Crystal Hub]: Both GUI sources failed to load. Your executor might not support HttpGet, or your internet/ISP is blocking GitHub raw links.")
+        return -- Stop the script completely
+    end
+end
+
 local Window = OrionLib:MakeWindow({Name = "Crystal Mining Hub", HidePremium = false, SaveConfig = true, ConfigFolder = "CrystalHubConfig"})
 
 --// Utility Functions
