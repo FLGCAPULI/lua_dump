@@ -68,7 +68,14 @@ local _G = {
         ApplyToAura = false,
         MinValue = 0,
         MinWeightKg = 0,
-        MinTier = 0
+        Tiers = {
+            Mythic = true,
+            Legendary = true,
+            Epic = true,
+            Rare = true,
+            Uncommon = true,
+            Common = true
+        }
     }
 }
 
@@ -121,11 +128,13 @@ local function passesFilter(crystal, context)
     
     local valueAttr = crystal:GetAttribute("Value") or 0
     local weightAttr = crystal:GetAttribute("weightkg") or 0
-    local tierAttr = crystal:GetAttribute("tier") or 0
+    local tierAttr = crystal:GetAttribute("TierName") or "Unknown"
 
     if tonumber(valueAttr) < _G.Filters.MinValue then return false end
     if tonumber(weightAttr) < _G.Filters.MinWeightKg then return false end
-    if tonumber(tierAttr) < _G.Filters.MinTier then return false end
+    
+    -- Check if the specific TierName is allowed in the filter list
+    if _G.Filters.Tiers[tierAttr] == false then return false end
 
     return true
 end
@@ -367,11 +376,11 @@ task.spawn(function()
                                 txtLabel.TextSize = _G.ESPConfig.TextSize
                                 
                                 local val = part:GetAttribute("Value") or 0
-                                local tier = part:GetAttribute("tier") or "?"
+                                local tier = part:GetAttribute("TierName") or "?"
                                 
                                 local content = ""
                                 if _G.ESPConfig.ShowValue then content = content .. string.format("Value: %s\n", formatNumber(val)) end
-                                if _G.ESPConfig.ShowTier then content = content .. string.format("[Tier %s]", tostring(tier)) end
+                                if _G.ESPConfig.ShowTier then content = content .. string.format("[%s]", tostring(tier)) end
                                 txtLabel.Text = content
                             end
                         end
@@ -595,6 +604,92 @@ local function CreateToggle(parent, name, defaultState, callback)
     end)
 end
 
+local function CreateMultiDropdown(parent, name, optionsDict, orderList)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 42)
+    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    frame.ClipsDescendants = true
+    frame.Parent = parent
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+
+    local topBtn = Instance.new("TextButton")
+    topBtn.Size = UDim2.new(1, 0, 0, 42)
+    topBtn.BackgroundTransparency = 1
+    topBtn.Text = "  " .. name
+    topBtn.TextColor3 = Color3.fromRGB(243, 244, 246)
+    topBtn.Font = Enum.Font.GothamBold
+    topBtn.TextSize = 13
+    topBtn.TextXAlignment = Enum.TextXAlignment.Left
+    topBtn.Parent = frame
+
+    local arrow = Instance.new("TextLabel")
+    arrow.Size = UDim2.new(0, 30, 0, 42)
+    arrow.Position = UDim2.new(1, -30, 0, 0)
+    arrow.BackgroundTransparency = 1
+    arrow.Text = "▼"
+    arrow.TextColor3 = Color3.fromRGB(150, 150, 150)
+    arrow.Font = Enum.Font.GothamBold
+    arrow.TextSize = 12
+    arrow.Parent = frame
+
+    local itemsContainer = Instance.new("Frame")
+    itemsContainer.Size = UDim2.new(1, 0, 0, 0)
+    itemsContainer.Position = UDim2.new(0, 0, 0, 42)
+    itemsContainer.BackgroundTransparency = 1
+    itemsContainer.Parent = frame
+
+    local listLayout = Instance.new("UIListLayout")
+    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    listLayout.Parent = itemsContainer
+
+    local isOpen = false
+    topBtn.MouseButton1Click:Connect(function()
+        isOpen = not isOpen
+        arrow.Text = isOpen and "▲" or "▼"
+        local targetHeight = isOpen and (42 + listLayout.AbsoluteContentSize.Y) or 42
+        TweenService:Create(frame, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, targetHeight)}):Play()
+    end)
+
+    for _, optName in ipairs(orderList) do
+        local optFrame = Instance.new("Frame")
+        optFrame.Size = UDim2.new(1, 0, 0, 34)
+        optFrame.BackgroundTransparency = 1
+        optFrame.Parent = itemsContainer
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -50, 1, 0)
+        lbl.Position = UDim2.new(0, 15, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = optName
+        lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 13
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = optFrame
+
+        local box = Instance.new("TextButton")
+        box.Size = UDim2.new(0, 20, 0, 20)
+        box.Position = UDim2.new(1, -35, 0.5, -10)
+        box.BackgroundColor3 = optionsDict[optName] and Color3.fromRGB(99, 102, 241) or Color3.fromRGB(60, 60, 65)
+        box.Text = ""
+        box.Parent = optFrame
+        Instance.new("UICorner", box).CornerRadius = UDim.new(0, 4)
+
+        box.MouseButton1Click:Connect(function()
+            optionsDict[optName] = not optionsDict[optName]
+            local targetColor = optionsDict[optName] and Color3.fromRGB(99, 102, 241) or Color3.fromRGB(60, 60, 65)
+            TweenService:Create(box, TweenInfo.new(0.2), {BackgroundColor3 = targetColor}):Play()
+        end)
+    end
+
+    -- Automatically resize when items are populated
+    listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        if isOpen then
+            frame.Size = UDim2.new(1, 0, 0, 42 + listLayout.AbsoluteContentSize.Y)
+        end
+    end)
+end
+
 local function CreateInput(parent, name, defaultValue, isNumber, callback)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, 0, 0, 42)
@@ -676,8 +771,17 @@ CreateToggle(TabFilter, "Apply Filters to Farm", _G.Filters.ApplyToFarm, functio
 CreateToggle(TabFilter, "Apply Filters to ESP", _G.Filters.ApplyToESP, function(v) _G.Filters.ApplyToESP = v end)
 CreateToggle(TabFilter, "Apply Filters to Aura Grab", _G.Filters.ApplyToAura, function(v) _G.Filters.ApplyToAura = v end)
 CreateInput(TabFilter, "Min Value", _G.Filters.MinValue, true, function(v) _G.Filters.MinValue = v end)
-CreateInput(TabFilter, "Min Tier", _G.Filters.MinTier, true, function(v) _G.Filters.MinTier = v end)
 CreateInput(TabFilter, "Min Weight", _G.Filters.MinWeightKg, true, function(v) _G.Filters.MinWeightKg = v end)
+
+-- Added Dropdown list for Tier filtering
+CreateMultiDropdown(TabFilter, "Filter by Tiers", _G.Filters.Tiers, {
+    "Mythic",
+    "Legendary",
+    "Epic",
+    "Rare",
+    "Uncommon",
+    "Common"
+})
 
 local TabVisuals = CreateTab("ESP Visuals")
 CreateToggle(TabVisuals, "Show Crystal Value", _G.ESPConfig.ShowValue, function(v) _G.ESPConfig.ShowValue = v end)
