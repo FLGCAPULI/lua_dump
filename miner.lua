@@ -1,9 +1,11 @@
 --[[
     Crystal Auto-Farm & ESP Hub (Remastered)
-    Features: Filterable ESP, Tween Auto Farm, Auto Sell, Grab Radius
+    Features: Filterable ESP, Tween Auto Farm, Auto Sell, Grab Radius, Stat Boosts
 ]]
 
---// Services
+-- ==========================================
+-- // Services
+-- ==========================================
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
@@ -12,32 +14,14 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 
---// Variables
+-- ==========================================
+-- // Variables & State
+-- ==========================================
 local LocalPlayer = Players.LocalPlayer
-local Connections = {} -- Stores events to disconnect on termination
-local ActiveTween = nil -- Stores the current active tween
+local Connections = {}
+local ActiveTween = nil
+local ESPObjects = {}
 
--- Dynamic getters to prevent infinite yielding that stops the GUI from loading
-local function getRealStats()
-    local pd = LocalPlayer:FindFirstChild("PlayerData")
-    return pd and pd:FindFirstChild("RealStats")
-end
-
-local function getCrystalsFolder()
-    local things = Workspace:FindFirstChild("Things")
-    return things and things:FindFirstChild("Crystals")
-end
-
-local function getDroppedCrystalsFolder()
-    return Workspace:FindFirstChild("DroppedCrystals")
-end
-
-local function getSellProx()
-    local things = Workspace:FindFirstChild("Things")
-    return things and things:FindFirstChild("SellProx")
-end
-
---// Configuration / State (Replaced _G with a safer local state)
 local State = {
     HubRunning = true,
     AutoFarm = false,
@@ -49,11 +33,10 @@ local State = {
     TweenSpeed = 30,
     MaxWeight = 100,
     InstantPrompt = true,
-    
     InfJump = true,
     SpeedEnabled = false,
     PlayerSpeed = 50,
-    
+
     ESPConfig = {
         ShowValue = true,
         ShowTier = true,
@@ -63,7 +46,7 @@ local State = {
         ColorG = 255,
         ColorB = 255
     },
-    
+
     Filters = {
         Farm = {
             Apply = false,
@@ -86,11 +69,12 @@ local State = {
     }
 }
 
---// Utility Functions
+-- ==========================================
+-- // Helper Functions
+-- ==========================================
 local function formatNumber(n)
     n = tonumber(n)
     if not n then return "0" end
-    
     if n >= 1e12 then return string.format("%.1fT", n / 1e12)
     elseif n >= 1e9 then return string.format("%.1fB", n / 1e9)
     elseif n >= 1e6 then return string.format("%.1fM", n / 1e6)
@@ -104,6 +88,25 @@ local function getHRP()
         return character.HumanoidRootPart
     end
     return nil
+end
+
+local function getRealStats()
+    local pd = LocalPlayer:FindFirstChild("PlayerData")
+    return pd and pd:FindFirstChild("RealStats")
+end
+
+local function getCrystalsFolder()
+    local things = Workspace:FindFirstChild("Things")
+    return things and things:FindFirstChild("Crystals")
+end
+
+local function getDroppedCrystalsFolder()
+    return Workspace:FindFirstChild("DroppedCrystals")
+end
+
+local function getSellProx()
+    local things = Workspace:FindFirstChild("Things")
+    return things and things:FindFirstChild("SellProx")
 end
 
 local function firePrompt(prompt)
@@ -121,9 +124,8 @@ end
 
 local function passesFilter(crystal, context)
     local filterConfig = State.Filters[context]
-    if not filterConfig then return true end
-    if not filterConfig.Apply then return true end
-    
+    if not filterConfig or not filterConfig.Apply then return true end
+
     local valueAttr = crystal:GetAttribute("Value") or 0
     local weightAttr = crystal:GetAttribute("WeightKg") or 0
     local tierAttr = crystal:GetAttribute("TierName") or "Unknown"
@@ -135,21 +137,42 @@ local function passesFilter(crystal, context)
     return true
 end
 
--- Safely tween and allow cancellation if object is destroyed
+local function isBagFull()
+    local RealStats = getRealStats()
+    if not RealStats then return false end
+
+    local maxWeight = RealStats:FindFirstChild("CarryWeight") and RealStats.CarryWeight.Value or State.MaxWeight
+    local currentWeight = RealStats:FindFirstChild("CurrentWeight") and RealStats.CurrentWeight.Value or 0 
+
+    return currentWeight >= maxWeight and maxWeight > 0
+end
+
+local function canCarry(weightToAdd)
+    local RealStats = getRealStats()
+    if not RealStats then return true end
+
+    local maxWeight = RealStats:FindFirstChild("CarryWeight") and RealStats.CarryWeight.Value or State.MaxWeight
+    local currentWeight = RealStats:FindFirstChild("CurrentWeight") and RealStats.CurrentWeight.Value or 0 
+
+    return (currentWeight + weightToAdd) <= maxWeight
+end
+
+-- ==========================================
+-- // Core Logic
+-- ==========================================
 local function tweenTo(targetCFrame, targetInstance)
     local hrp = getHRP()
     if not hrp then return end
-    
+
     if ActiveTween then ActiveTween:Cancel() end
-    
+
     local distance = (hrp.Position - targetCFrame.Position).Magnitude
     local timeToTween = distance / State.TweenSpeed
-    
+
     local tweenInfo = TweenInfo.new(timeToTween, Enum.EasingStyle.Linear)
     ActiveTween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
     ActiveTween:Play()
-    
-    -- Custom wait loop so we can abort if the crystal disappears
+
     while ActiveTween and ActiveTween.PlaybackState == Enum.PlaybackState.Playing do
         if not State.AutoFarm or (targetInstance and not targetInstance.Parent) then
             ActiveTween:Cancel()
@@ -159,30 +182,10 @@ local function tweenTo(targetCFrame, targetInstance)
     end
 end
 
-local function isBagFull()
-    local RealStats = getRealStats()
-    if not RealStats then return false end
-    
-    local maxWeight = RealStats:FindFirstChild("CarryWeight") and RealStats.CarryWeight.Value or State.MaxWeight
-    local currentWeight = RealStats:FindFirstChild("CurrentWeight") and RealStats.CurrentWeight.Value or 0 
-    
-    return currentWeight >= maxWeight and maxWeight > 0
-end
-
-local function canCarry(weightToAdd)
-    local RealStats = getRealStats()
-    if not RealStats then return true end
-    
-    local maxWeight = RealStats:FindFirstChild("CarryWeight") and RealStats.CarryWeight.Value or State.MaxWeight
-    local currentWeight = RealStats:FindFirstChild("CurrentWeight") and RealStats.CurrentWeight.Value or 0 
-    
-    return (currentWeight + weightToAdd) <= maxWeight
-end
-
 local function performSell()
     local SellProx = getSellProx()
     if not SellProx then return end
-    
+
     local prompt = SellProx:FindFirstChildWhichIsA("ProximityPrompt", true) 
     if prompt then
         local targetCFrame = SellProx:IsA("Model") and SellProx:GetPivot() or SellProx.CFrame
@@ -202,10 +205,10 @@ end
 local function getNearestCrystal()
     local hrp = getHRP()
     if not hrp then return nil end
-    
+
     local nearestDist = math.huge
     local nearestCrystal = nil
-    
+
     local function checkFolder(folder)
         if not folder then return end
         for _, crystal in ipairs(folder:GetChildren()) do
@@ -222,14 +225,16 @@ local function getNearestCrystal()
             end
         end
     end
-    
+
     checkFolder(getCrystalsFolder())
     checkFolder(getDroppedCrystalsFolder())
-    
+
     return nearestCrystal
 end
 
---// Events & Connections
+-- ==========================================
+-- // Event Connections
+-- ==========================================
 table.insert(Connections, UserInputService.JumpRequest:Connect(function()
     if State.InfJump and State.HubRunning then
         local char = LocalPlayer.Character
@@ -244,10 +249,9 @@ end))
 
 table.insert(Connections, RunService.Stepped:Connect(function()
     if not State.HubRunning then return end
-    
+
     local char = LocalPlayer.Character
     if char then
-        -- Optimized Noclip (Only checks top-level children, not deep descendants)
         if State.AutoFarm then
             for _, part in ipairs(char:GetChildren()) do
                 if part:IsA("BasePart") and part.CanCollide then
@@ -264,7 +268,9 @@ table.insert(Connections, RunService.Stepped:Connect(function()
     end
 end))
 
---// Main Loops
+-- ==========================================
+-- // Loops (Aura, Farm, Prompts, ESP)
+-- ==========================================
 task.spawn(function()
     while State.HubRunning and task.wait(1) do
         if State.InstantPrompt then
@@ -291,7 +297,6 @@ task.spawn(function()
                 local target = getNearestCrystal()
                 if target and target.Parent then
                     tweenTo(target.CFrame, target)
-                    
                     if target and target.Parent then
                         local prompt = target:FindFirstChildWhichIsA("ProximityPrompt", true)
                         if prompt then
@@ -318,7 +323,6 @@ task.spawn(function()
                             local prompt = part:FindFirstChildOfClass("ProximityPrompt")
                             if prompt and passesFilter(part, "Aura") then
                                 local weight = tonumber(part:GetAttribute("WeightKg")) or 0
-                                
                                 if not State.PreventOverweight or canCarry(weight) then
                                     local dist = (hrp.Position - part.Position).Magnitude
                                     if dist <= State.GrabRadius then
@@ -336,7 +340,6 @@ task.spawn(function()
     end
 end)
 
-local ESPObjects = {}
 task.spawn(function()
     while State.HubRunning and task.wait(0.5) do
         if not State.ESP then
@@ -346,7 +349,7 @@ task.spawn(function()
             table.clear(ESPObjects)
             continue
         end
-        
+
         local function createESP(folder)
             if not folder then return end
             for _, crystal in ipairs(folder:GetChildren()) do
@@ -368,7 +371,9 @@ task.spawn(function()
                             textLabel.TextStrokeTransparency = 0
                             
                             local safeParent = (gethui and gethui()) or CoreGui
-                            if not pcall(function() local _ = safeParent.Name end) then safeParent = LocalPlayer:WaitForChild("PlayerGui") end
+                            if not pcall(function() local _ = safeParent.Name end) then 
+                                safeParent = LocalPlayer:WaitForChild("PlayerGui") 
+                            end
                             billboard.Parent = safeParent
                             
                             ESPObjects[part] = billboard
@@ -420,9 +425,13 @@ task.spawn(function()
     end
 end)
 
---// Native GUI Construction
+-- ==========================================
+-- // Native GUI Construction
+-- ==========================================
 local safeParent = (gethui and gethui()) or CoreGui
-if not pcall(function() local _ = safeParent.Name end) then safeParent = LocalPlayer:WaitForChild("PlayerGui") end
+if not pcall(function() local _ = safeParent.Name end) then 
+    safeParent = LocalPlayer:WaitForChild("PlayerGui") 
+end
 
 if safeParent:FindFirstChild("CrystalNativeHub") then
     safeParent.CrystalNativeHub:Destroy()
@@ -443,14 +452,13 @@ MainFrame.Active = true
 MainFrame.Parent = ScreenGui
 Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
 
--- Modern Custom Dragging (Replaces Deprecated Draggable = true)
+-- // Custom Dragging Logic
 local dragging, dragInput, dragStart, startPos
 MainFrame.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         dragStart = input.Position
         startPos = MainFrame.Position
-        
         input.Changed:Connect(function()
             if input.UserInputState == Enum.UserInputState.End then dragging = false end
         end)
@@ -492,6 +500,7 @@ MinimizeBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = false
 end)
 
+-- // Sidebar & Layout Setup
 local Sidebar = Instance.new("Frame")
 Sidebar.Size = UDim2.new(0, 140, 1, 0)
 Sidebar.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
@@ -536,6 +545,9 @@ ContentArea.Parent = MainFrame
 local Tabs = {}
 local CurrentTab = nil
 
+-- ==========================================
+-- // UI Component Generators
+-- ==========================================
 local function CreateTab(name)
     local TabBtn = Instance.new("TextButton")
     TabBtn.Size = UDim2.new(0.85, 0, 0, 34)
@@ -781,7 +793,38 @@ local function CreateLabel(parent, text)
     return label
 end
 
--- Populate GUI
+local function CreateButton(parent, text, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 42)
+    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    frame.Parent = parent
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(243, 244, 246)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+    btn.Parent = frame
+
+    btn.MouseButton1Click:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.1), {TextColor3 = Color3.fromRGB(99, 102, 241)}):Play()
+        task.delay(0.1, function()
+            if btn.Parent then
+                TweenService:Create(btn, TweenInfo.new(0.1), {TextColor3 = Color3.fromRGB(243, 244, 246)}):Play()
+            end
+        end)
+        callback()
+    end)
+
+    return btn
+end
+
+-- ==========================================
+-- // Populate GUI
+-- ==========================================
 local TabMain = CreateTab("Main Controls")
 CreateToggle(TabMain, "Auto Farm Crystals", State.AutoFarm, function(v) State.AutoFarm = v end)
 CreateToggle(TabMain, "Auto Sell (When Bag Full)", State.AutoSell, function(v) State.AutoSell = v end)
@@ -792,6 +835,26 @@ local TabLocal = CreateTab("Local Player")
 CreateToggle(TabLocal, "Infinite Jump", State.InfJump, function(v) State.InfJump = v end)
 CreateToggle(TabLocal, "Enable WalkSpeed", State.SpeedEnabled, function(v) State.SpeedEnabled = v end)
 CreateInput(TabLocal, "Player WalkSpeed", State.PlayerSpeed, true, function(v) State.PlayerSpeed = v end)
+CreateButton(TabLocal, "Add 999T Luck & Boosts", function()
+    local RealStats = getRealStats()
+    if RealStats then
+        local targetStats = {
+            "CoinBoostSeconds",
+            "LuckStacks",
+            "LuckBoostRemaining",
+            "PlotLuck",
+            "UltraLuckBoostRemaining"
+        }
+        for _, statName in ipairs(targetStats) do
+            local stat = RealStats:FindFirstChild(statName)
+            if stat then
+                pcall(function()
+                    stat.Value = stat.Value + 999999999999999
+                end)
+            end
+        end
+    end
+end)
 
 local TabFarmFilter = CreateTab("Farm Filters")
 CreateToggle(TabFarmFilter, "Apply Filters to Farm", State.Filters.Farm.Apply, function(v) State.Filters.Farm.Apply = v end)
@@ -825,6 +888,9 @@ CreateInput(TabESP, "Color: Red (0-255)", State.ESPConfig.ColorR, true, function
 CreateInput(TabESP, "Color: Green (0-255)", State.ESPConfig.ColorG, true, function(v) State.ESPConfig.ColorG = math.clamp(v, 0, 255) end)
 CreateInput(TabESP, "Color: Blue (0-255)", State.ESPConfig.ColorB, true, function(v) State.ESPConfig.ColorB = math.clamp(v, 0, 255) end)
 
+-- ==========================================
+-- // Live Stats & Termination
+-- ==========================================
 local TabStats = CreateTab("Live Stats")
 local CashLabel = CreateLabel(TabStats, "Cash: Loading...")
 local CarryLabel = CreateLabel(TabStats, "Capacity: Loading...")
@@ -843,17 +909,17 @@ Instance.new("UICorner", TerminateBtn).CornerRadius = UDim.new(0, 6)
 TerminateBtn.MouseButton1Click:Connect(function()
     State.HubRunning = false
     if ActiveTween then ActiveTween:Cancel() end
-    
+
     for _, conn in ipairs(Connections) do
         conn:Disconnect()
     end
     table.clear(Connections)
-    
+
     for _, gui in pairs(ESPObjects) do
         if gui then gui:Destroy() end
     end
     table.clear(ESPObjects)
-    
+
     if safeParent:FindFirstChild("CrystalNativeHub") then
         safeParent.CrystalNativeHub:Destroy()
     end
