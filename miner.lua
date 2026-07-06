@@ -1,940 +1,1056 @@
---[[
-    Crystal Auto-Farm & ESP Hub (Remastered)
-    Features: Filterable ESP, Tween Auto Farm, Auto Sell, Grab Radius, Stat Boosts
-]]
-
--- ==========================================
--- // Services
--- ==========================================
 local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
-local CoreGui = game:GetService("CoreGui")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser")
 
--- ==========================================
--- // Variables & State
--- ==========================================
-local LocalPlayer = Players.LocalPlayer
-local Connections = {}
-local ActiveTween = nil
-local ESPObjects = {}
-
-local State = {
-    HubRunning = true,
-    AutoFarm = false,
-    AutoSell = false,
-    ESP = false,
-    GrabRadiusEnabled = false,
-    PreventOverweight = true,
-    GrabRadius = 20,
-    TweenSpeed = 30,
-    MaxWeight = 100,
-    InstantPrompt = true,
-    InfJump = true,
-    SpeedEnabled = false,
-    PlayerSpeed = 50,
-
-    ESPConfig = {
-        ShowValue = true,
-        ShowTier = true,
-        ShowDistance = true,
-        TextSize = 14,
-        ColorR = 0,
-        ColorG = 255,
-        ColorB = 255
-    },
-
-    Filters = {
-        Farm = {
-            Apply = false,
-            MinValue = 0,
-            MinWeightKg = 0,
-            Tiers = { Mythic = true, Legendary = true, Epic = true, Rare = true, Uncommon = true, Common = true }
-        },
-        ESP = {
-            Apply = false,
-            MinValue = 0,
-            MinWeightKg = 0,
-            Tiers = { Mythic = true, Legendary = true, Epic = true, Rare = true, Uncommon = true, Common = true }
-        },
-        Aura = {
-            Apply = false,
-            MinValue = 0,
-            MinWeightKg = 0,
-            Tiers = { Mythic = true, Legendary = true, Epic = true, Rare = true, Uncommon = true, Common = true }
-        }
-    }
-}
-
--- ==========================================
--- // Helper Functions
--- ==========================================
-local function formatNumber(n)
-    n = tonumber(n)
-    if not n then return "0" end
-    if n >= 1e12 then return string.format("%.1fT", n / 1e12)
-    elseif n >= 1e9 then return string.format("%.1fB", n / 1e9)
-    elseif n >= 1e6 then return string.format("%.1fM", n / 1e6)
-    elseif n >= 1e3 then return string.format("%.1fK", n / 1e3)
-    else return tostring(math.floor(n)) end
+-- Wait securely for the player to exist
+local player = Players.LocalPlayer
+while not player do
+    task.wait(0.1)
+    player = Players.LocalPlayer
 end
 
+-- Helper to dynamically get HRP
 local function getHRP()
-    local character = LocalPlayer.Character
-    if character and character:FindFirstChild("HumanoidRootPart") then
-        return character.HumanoidRootPart
+    local char = player.Character
+    if char then
+        return char:FindFirstChild("HumanoidRootPart")
     end
     return nil
 end
 
-local function getRealStats()
-    local pd = LocalPlayer:FindFirstChild("PlayerData")
-    return pd and pd:FindFirstChild("RealStats")
-end
+local wp1 = nil
+local wp2 = nil
+local isRunning = false
+local loopActive = false
+local isPaused = false
+local forceUnloadTrigger = false
+local targetedVehicle = nil
 
-local function getCrystalsFolder()
-    local things = Workspace:FindFirstChild("Things")
-    return things and things:FindFirstChild("Crystals")
-end
-
-local function getDroppedCrystalsFolder()
-    return Workspace:FindFirstChild("DroppedCrystals")
-end
-
-local function getSellProx()
-    local things = Workspace:FindFirstChild("Things")
-    return things and things:FindFirstChild("SellProx")
-end
-
-local function firePrompt(prompt)
-    if prompt and prompt:IsA("ProximityPrompt") then
-        if fireproximityprompt then
-            fireproximityprompt(prompt)
-        else
-            prompt.HoldDuration = 0
-            prompt:InputHoldBegin()
-            task.wait(0.1)
-            prompt:InputHoldEnd()
-        end
-    end
-end
-
-local function passesFilter(crystal, context)
-    local filterConfig = State.Filters[context]
-    if not filterConfig or not filterConfig.Apply then return true end
-
-    local valueAttr = crystal:GetAttribute("Value") or 0
-    local weightAttr = crystal:GetAttribute("WeightKg") or 0
-    local tierAttr = crystal:GetAttribute("TierName") or "Unknown"
-
-    if tonumber(valueAttr) < filterConfig.MinValue then return false end
-    if tonumber(weightAttr) < filterConfig.MinWeightKg then return false end
-    if filterConfig.Tiers[tierAttr] == false then return false end
-
-    return true
-end
-
-local function isBagFull()
-    local RealStats = getRealStats()
-    if not RealStats then return false end
-
-    local maxWeight = RealStats:FindFirstChild("CarryWeight") and RealStats.CarryWeight.Value or State.MaxWeight
-    local currentWeight = RealStats:FindFirstChild("CurrentWeight") and RealStats.CurrentWeight.Value or 0 
-
-    return currentWeight >= maxWeight and maxWeight > 0
-end
-
-local function canCarry(weightToAdd)
-    local RealStats = getRealStats()
-    if not RealStats then return true end
-
-    local maxWeight = RealStats:FindFirstChild("CarryWeight") and RealStats.CarryWeight.Value or State.MaxWeight
-    local currentWeight = RealStats:FindFirstChild("CurrentWeight") and RealStats.CurrentWeight.Value or 0 
-
-    return (currentWeight + weightToAdd) <= maxWeight
-end
-
--- ==========================================
--- // Core Logic
--- ==========================================
-local function tweenTo(targetCFrame, targetInstance)
-    local hrp = getHRP()
-    if not hrp then return end
-
-    if ActiveTween then ActiveTween:Cancel() end
-
-    local distance = (hrp.Position - targetCFrame.Position).Magnitude
-    local timeToTween = distance / State.TweenSpeed
-
-    local tweenInfo = TweenInfo.new(timeToTween, Enum.EasingStyle.Linear)
-    ActiveTween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
-    ActiveTween:Play()
-
-    while ActiveTween and ActiveTween.PlaybackState == Enum.PlaybackState.Playing do
-        if not State.AutoFarm or (targetInstance and not targetInstance.Parent) then
-            ActiveTween:Cancel()
-            break
-        end
-        task.wait(0.05)
-    end
-end
-
-local function performSell()
-    local SellProx = getSellProx()
-    if not SellProx then return end
-
-    local prompt = SellProx:FindFirstChildWhichIsA("ProximityPrompt", true) 
-    if prompt then
-        local targetCFrame = SellProx:IsA("Model") and SellProx:GetPivot() or SellProx.CFrame
-        tweenTo(targetCFrame * CFrame.new(0, 0, 3), SellProx) 
-        
-        task.wait(0.2)
-        firePrompt(prompt)
-        
-        task.wait(0.5)
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.One, false, game)
-        task.wait(0.1)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.One, false, game)
-        task.wait(1)
-    end
-end
-
-local function getNearestCrystal()
-    local hrp = getHRP()
-    if not hrp then return nil end
-
-    local nearestDist = math.huge
-    local nearestCrystal = nil
-
-    local function checkFolder(folder)
-        if not folder then return end
-        for _, crystal in ipairs(folder:GetChildren()) do
-            local part = crystal:IsA("Model") and crystal.PrimaryPart or crystal
-            
-            if part:IsA("BasePart") and part:FindFirstChildOfClass("ProximityPrompt") then
-                if passesFilter(part, "Farm") then
-                    local dist = (hrp.Position - part.Position).Magnitude
-                    if dist < nearestDist then
-                        nearestDist = dist
-                        nearestCrystal = part
-                    end
-                end
-            end
-        end
-    end
-
-    checkFolder(getCrystalsFolder())
-    checkFolder(getDroppedCrystalsFolder())
-
-    return nearestCrystal
-end
-
--- ==========================================
--- // Event Connections
--- ==========================================
-table.insert(Connections, UserInputService.JumpRequest:Connect(function()
-    if State.InfJump and State.HubRunning then
-        local char = LocalPlayer.Character
-        if char then
-            local hum = char:FindFirstChildWhichIsA("Humanoid")
-            if hum then
-                hum:ChangeState(Enum.HumanoidStateType.Jumping)
-            end
-        end
-    end
-end))
-
-table.insert(Connections, RunService.Stepped:Connect(function()
-    if not State.HubRunning then return end
-
-    local char = LocalPlayer.Character
-    if char then
-        if State.AutoFarm then
-            for _, part in ipairs(char:GetChildren()) do
-                if part:IsA("BasePart") and part.CanCollide then
-                    part.CanCollide = false
-                end
-            end
-        end
-        if State.SpeedEnabled then
-            local hum = char:FindFirstChildWhichIsA("Humanoid")
-            if hum then
-                hum.WalkSpeed = State.PlayerSpeed
-            end
-        end
-    end
-end))
-
--- ==========================================
--- // Loops (Aura, Farm, Prompts, ESP)
--- ==========================================
-task.spawn(function()
-    while State.HubRunning and task.wait(1) do
-        if State.InstantPrompt then
-            local function modifyPrompts(folder)
-                if not folder then return end
-                for _, desc in ipairs(folder:GetDescendants()) do
-                    if desc:IsA("ProximityPrompt") and desc.HoldDuration > 0 then
-                        desc.HoldDuration = 0
-                    end
-                end
-            end
-            modifyPrompts(Workspace:FindFirstChild("Things"))
-            modifyPrompts(getDroppedCrystalsFolder())
-        end
-    end
+-- ANTI-AFK (On by default)
+player.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
 end)
 
-task.spawn(function()
-    while State.HubRunning and task.wait(0.1) do
-        if State.AutoFarm then
-            if State.AutoSell and isBagFull() then
-                performSell()
-            else
-                local target = getNearestCrystal()
-                if target and target.Parent then
-                    tweenTo(target.CFrame, target)
-                    if target and target.Parent then
-                        local prompt = target:FindFirstChildWhichIsA("ProximityPrompt", true)
-                        if prompt then
-                            firePrompt(prompt)
-                            task.wait(0.2)
-                        end
-                    end
-                end
-            end
-        end
-    end
-end)
-
-task.spawn(function()
-    while State.HubRunning and task.wait(0.1) do
-        if State.GrabRadiusEnabled then
-            local hrp = getHRP()
-            if hrp then
-                local function grabFrom(folder)
-                    if not folder then return end
-                    for _, crystal in ipairs(folder:GetChildren()) do
-                        local part = crystal:IsA("Model") and crystal.PrimaryPart or crystal
-                        if part and part:IsA("BasePart") then
-                            local prompt = part:FindFirstChildOfClass("ProximityPrompt")
-                            if prompt and passesFilter(part, "Aura") then
-                                local weight = tonumber(part:GetAttribute("WeightKg")) or 0
-                                if not State.PreventOverweight or canCarry(weight) then
-                                    local dist = (hrp.Position - part.Position).Magnitude
-                                    if dist <= State.GrabRadius then
-                                        firePrompt(prompt)
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-                grabFrom(getCrystalsFolder())
-                grabFrom(getDroppedCrystalsFolder())
-            end
-        end
-    end
-end)
-
-task.spawn(function()
-    while State.HubRunning and task.wait(0.5) do
-        if not State.ESP then
-            for part, gui in pairs(ESPObjects) do
-                if gui then gui:Destroy() end
-            end
-            table.clear(ESPObjects)
-            continue
-        end
-
-        local function createESP(folder)
-            if not folder then return end
-            for _, crystal in ipairs(folder:GetChildren()) do
-                local part = crystal:IsA("Model") and crystal.PrimaryPart or crystal
-                if part and part:IsA("BasePart") then
-                    if passesFilter(part, "ESP") then
-                        if not ESPObjects[part] then
-                            local billboard = Instance.new("BillboardGui")
-                            billboard.Name = "CrystalESP"
-                            billboard.AlwaysOnTop = true
-                            billboard.Size = UDim2.new(0, 150, 0, 50)
-                            billboard.StudsOffset = Vector3.new(0, 2, 0)
-                            billboard.Adornee = part
-                            
-                            local textLabel = Instance.new("TextLabel", billboard)
-                            textLabel.Size = UDim2.new(1, 0, 1, 0)
-                            textLabel.BackgroundTransparency = 1
-                            textLabel.TextScaled = false
-                            textLabel.TextStrokeTransparency = 0
-                            
-                            local safeParent = (gethui and gethui()) or CoreGui
-                            if not pcall(function() local _ = safeParent.Name end) then 
-                                safeParent = LocalPlayer:WaitForChild("PlayerGui") 
-                            end
-                            billboard.Parent = safeParent
-                            
-                            ESPObjects[part] = billboard
-                            
-                            -- Cleanup when crystal is destroyed
-                            local conn; conn = part.AncestryChanged:Connect(function(_, parent)
-                                if not parent then
-                                    if ESPObjects[part] then ESPObjects[part]:Destroy() end
-                                    ESPObjects[part] = nil
-                                    conn:Disconnect()
-                                end
-                            end)
-                        end
-                        
-                        if ESPObjects[part] then
-                            local txtLabel = ESPObjects[part]:FindFirstChildOfClass("TextLabel")
-                            if txtLabel then
-                                txtLabel.TextColor3 = Color3.fromRGB(State.ESPConfig.ColorR, State.ESPConfig.ColorG, State.ESPConfig.ColorB)
-                                txtLabel.TextSize = State.ESPConfig.TextSize
-                                
-                                local val = part:GetAttribute("Value") or 0
-                                local tier = part:GetAttribute("TierName") or "?"
-                                
-                                local lines = {}
-                                if State.ESPConfig.ShowTier then table.insert(lines, string.format("[%s]", tostring(tier))) end
-                                if State.ESPConfig.ShowValue then table.insert(lines, string.format("Value: %s", formatNumber(val))) end
-                                if State.ESPConfig.ShowDistance then
-                                    local hrp = getHRP()
-                                    if hrp then
-                                        local dist = math.floor((hrp.Position - part.Position).Magnitude)
-                                        table.insert(lines, string.format("%dm", dist))
-                                    end
-                                end
-                                txtLabel.Text = table.concat(lines, "\n")
-                            end
-                        end
-                    else
-                        if ESPObjects[part] then
-                            ESPObjects[part]:Destroy()
-                            ESPObjects[part] = nil
-                        end
-                    end
-                end
-            end
-        end
-        
-        createESP(getCrystalsFolder())
-        createESP(getDroppedCrystalsFolder())
-    end
-end)
+-- CONFIGURATION
+local VEHICLE_CAPACITY = 120 
+local MAX_CARGO_CHILDREN = 240 -- The exact number of instances in CargoVolume when full
 
 -- ==========================================
--- // Native GUI Construction
+-- 1. GUI Setup (Executor Safe & Redesigned)
 -- ==========================================
-local safeParent = (gethui and gethui()) or CoreGui
-if not pcall(function() local _ = safeParent.Name end) then 
-    safeParent = LocalPlayer:WaitForChild("PlayerGui") 
-end
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AutoFarmGUI"
+screenGui.ResetOnSpawn = false
 
-if safeParent:FindFirstChild("CrystalNativeHub") then
-    safeParent.CrystalNativeHub:Destroy()
-end
+local success = pcall(function() screenGui.Parent = game:GetService("CoreGui") end)
+if not success then screenGui.Parent = player:WaitForChild("PlayerGui") end
 
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "CrystalNativeHub"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = safeParent
+-- Shared Theme Colors
+local Theme = {
+    BG = Color3.fromRGB(30, 30, 30),
+    TabBG = Color3.fromRGB(20, 20, 20),
+    Button = Color3.fromRGB(45, 45, 45),
+    ButtonHover = Color3.fromRGB(60, 60, 60),
+    Text = Color3.fromRGB(220, 220, 220),
+    Active = Color3.fromRGB(80, 80, 80)
+}
 
-local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 500, 0, 380)
-MainFrame.Position = UDim2.new(0.5, -250, 0.5, -190)
-MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Parent = ScreenGui
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+-- Frame
+local frame = Instance.new("Frame", screenGui)
+frame.Size = UDim2.new(0, 280, 0, 400)
+frame.Position = UDim2.new(0, 10, 0, 10)
+frame.BackgroundColor3 = Theme.BG
+frame.ClipsDescendants = true
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
 
--- // Custom Dragging Logic
-local dragging, dragInput, dragStart, startPos
-MainFrame.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = MainFrame.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then dragging = false end
-        end)
-    end
-end)
+-- Topbar
+local topbar = Instance.new("Frame", frame)
+topbar.Size = UDim2.new(1, 0, 0, 30)
+topbar.BackgroundColor3 = Theme.TabBG
+topbar.BorderSizePixel = 0
 
-MainFrame.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-        dragInput = input
-    end
-end)
+local title = Instance.new("TextLabel", topbar)
+title.Size = UDim2.new(0.8, 0, 1, 0)
+title.Position = UDim2.new(0.05, 0, 0, 0)
+title.Text = "Auto Farm Script"
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.TextColor3 = Theme.Text
+title.Font = Enum.Font.Code
+title.BackgroundTransparency = 1
 
-UserInputService.InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
-        local delta = input.Position - dragStart
-        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
-end)
+local btnMinimize = Instance.new("TextButton", topbar)
+btnMinimize.Size = UDim2.new(0.2, 0, 1, 0)
+btnMinimize.Position = UDim2.new(0.8, 0, 0, 0)
+btnMinimize.Text = "-"
+btnMinimize.BackgroundColor3 = Theme.TabBG
+btnMinimize.TextColor3 = Theme.Text
+btnMinimize.Font = Enum.Font.Code
+btnMinimize.BorderSizePixel = 0
 
-table.insert(Connections, UserInputService.InputBegan:Connect(function(input, processed)
-    if not processed and input.KeyCode == Enum.KeyCode.K then
-        MainFrame.Visible = not MainFrame.Visible
-    end
-end))
+-- Tab Bar
+local tabBar = Instance.new("Frame", frame)
+tabBar.Size = UDim2.new(1, 0, 0, 25)
+tabBar.Position = UDim2.new(0, 0, 0, 30)
+tabBar.BackgroundColor3 = Theme.TabBG
+tabBar.BorderSizePixel = 0
 
-local MinimizeBtn = Instance.new("TextButton")
-MinimizeBtn.Size = UDim2.new(0, 30, 0, 30)
-MinimizeBtn.Position = UDim2.new(1, -40, 0, 10)
-MinimizeBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
-MinimizeBtn.Text = "-"
-MinimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-MinimizeBtn.Font = Enum.Font.GothamBold
-MinimizeBtn.TextSize = 18
-MinimizeBtn.ZIndex = 10
-MinimizeBtn.Parent = MainFrame
-Instance.new("UICorner", MinimizeBtn).CornerRadius = UDim.new(0, 6)
-
-MinimizeBtn.MouseButton1Click:Connect(function()
-    MainFrame.Visible = false
-end)
-
--- // Sidebar & Layout Setup
-local Sidebar = Instance.new("Frame")
-Sidebar.Size = UDim2.new(0, 140, 1, 0)
-Sidebar.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-Sidebar.BorderSizePixel = 0
-Sidebar.Parent = MainFrame
-Instance.new("UICorner", Sidebar).CornerRadius = UDim.new(0, 10)
-
-local SidebarFix = Instance.new("Frame")
-SidebarFix.Size = UDim2.new(0, 10, 1, 0)
-SidebarFix.Position = UDim2.new(1, -10, 0, 0)
-SidebarFix.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-SidebarFix.BorderSizePixel = 0
-SidebarFix.Parent = Sidebar
-
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0, 60)
-Title.BackgroundTransparency = 1
-Title.Text = "Crystal Hub"
-Title.TextColor3 = Color3.fromRGB(243, 244, 246)
-Title.Font = Enum.Font.GothamBold
-Title.TextSize = 16
-Title.Parent = Sidebar
-
-local TabContainer = Instance.new("Frame")
-TabContainer.Size = UDim2.new(1, 0, 1, -110)
-TabContainer.Position = UDim2.new(0, 0, 0, 60)
-TabContainer.BackgroundTransparency = 1
-TabContainer.Parent = Sidebar
-
-local TabListLayout = Instance.new("UIListLayout")
-TabListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-TabListLayout.Padding = UDim.new(0, 6)
-TabListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-TabListLayout.Parent = TabContainer
-
-local ContentArea = Instance.new("Frame")
-ContentArea.Size = UDim2.new(1, -140, 1, 0)
-ContentArea.Position = UDim2.new(0, 140, 0, 0)
-ContentArea.BackgroundTransparency = 1
-ContentArea.Parent = MainFrame
-
-local Tabs = {}
-local CurrentTab = nil
-
--- ==========================================
--- // UI Component Generators
--- ==========================================
-local function CreateTab(name)
-    local TabBtn = Instance.new("TextButton")
-    TabBtn.Size = UDim2.new(0.85, 0, 0, 34)
-    TabBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-    TabBtn.BackgroundTransparency = 1
-    TabBtn.Text = name
-    TabBtn.TextColor3 = Color3.fromRGB(156, 163, 175)
-    TabBtn.Font = Enum.Font.GothamSemibold
-    TabBtn.TextSize = 13
-    TabBtn.Parent = TabContainer
-    Instance.new("UICorner", TabBtn).CornerRadius = UDim.new(0, 6)
-
-    local TabContent = Instance.new("ScrollingFrame")
-    TabContent.Size = UDim2.new(1, -30, 1, -40)
-    TabContent.Position = UDim2.new(0, 15, 0, 20)
-    TabContent.BackgroundTransparency = 1
-    TabContent.ScrollBarThickness = 3
-    TabContent.ScrollBarImageColor3 = Color3.fromRGB(99, 102, 241)
-    TabContent.Visible = false
-    TabContent.Parent = ContentArea
-
-    local UIList = Instance.new("UIListLayout")
-    UIList.SortOrder = Enum.SortOrder.LayoutOrder
-    UIList.Padding = UDim.new(0, 12)
-    UIList.Parent = TabContent
-
-    UIList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        TabContent.CanvasSize = UDim2.new(0, 0, 0, UIList.AbsoluteContentSize.Y + 10)
-    end)
-
-    TabBtn.MouseButton1Click:Connect(function()
-        if CurrentTab then
-            CurrentTab.Btn.BackgroundTransparency = 1
-            CurrentTab.Btn.TextColor3 = Color3.fromRGB(156, 163, 175)
-            CurrentTab.Content.Visible = false
-        end
-        TabBtn.BackgroundTransparency = 0
-        TabBtn.BackgroundColor3 = Color3.fromRGB(99, 102, 241)
-        TabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        TabContent.Visible = true
-        CurrentTab = {Btn = TabBtn, Content = TabContent}
-    end)
-
-    table.insert(Tabs, {Btn = TabBtn, Content = TabContent})
-    if #Tabs == 1 then
-        TabBtn.BackgroundTransparency = 0
-        TabBtn.BackgroundColor3 = Color3.fromRGB(99, 102, 241)
-        TabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        TabContent.Visible = true
-        CurrentTab = Tabs[1]
-    end
-
-    return TabContent
-end
-
-local function CreateToggle(parent, name, defaultState, callback)
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 0, 42)
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-    frame.Parent = parent
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -70, 1, 0)
-    label.Position = UDim2.new(0, 15, 0, 0)
-    label.BackgroundTransparency = 1
-    label.Text = name
-    label.TextColor3 = Color3.fromRGB(243, 244, 246)
-    label.Font = Enum.Font.Gotham
-    label.TextSize = 13
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = frame
-
-    local ToggleBtn = Instance.new("TextButton")
-    ToggleBtn.Size = UDim2.new(0, 44, 0, 24)
-    ToggleBtn.Position = UDim2.new(1, -55, 0.5, -12)
-    ToggleBtn.BackgroundColor3 = defaultState and Color3.fromRGB(99, 102, 241) or Color3.fromRGB(60, 60, 65)
-    ToggleBtn.Text = ""
-    ToggleBtn.Parent = frame
-    Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(1, 0)
-
-    local Circle = Instance.new("Frame")
-    Circle.Size = UDim2.new(0, 20, 0, 20)
-    Circle.Position = defaultState and UDim2.new(1, -22, 0.5, -10) or UDim2.new(0, 2, 0.5, -10)
-    Circle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    Circle.Parent = ToggleBtn
-    Instance.new("UICorner", Circle).CornerRadius = UDim.new(1, 0)
-
-    local state = defaultState
-    ToggleBtn.MouseButton1Click:Connect(function()
-        state = not state
-        callback(state)
-        
-        local targetColor = state and Color3.fromRGB(99, 102, 241) or Color3.fromRGB(60, 60, 65)
-        local targetPos = state and UDim2.new(1, -22, 0.5, -10) or UDim2.new(0, 2, 0.5, -10)
-        
-        TweenService:Create(ToggleBtn, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3 = targetColor}):Play()
-        TweenService:Create(Circle, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = targetPos}):Play()
-    end)
-end
-
-local function CreateMultiDropdown(parent, name, optionsDict, orderList)
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 0, 42)
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-    frame.ClipsDescendants = true
-    frame.Parent = parent
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-
-    local topBtn = Instance.new("TextButton")
-    topBtn.Size = UDim2.new(1, 0, 0, 42)
-    topBtn.BackgroundTransparency = 1
-    topBtn.Text = "  " .. name
-    topBtn.TextColor3 = Color3.fromRGB(243, 244, 246)
-    topBtn.Font = Enum.Font.GothamBold
-    topBtn.TextSize = 13
-    topBtn.TextXAlignment = Enum.TextXAlignment.Left
-    topBtn.Parent = frame
-
-    local arrow = Instance.new("TextLabel")
-    arrow.Size = UDim2.new(0, 30, 0, 42)
-    arrow.Position = UDim2.new(1, -30, 0, 0)
-    arrow.BackgroundTransparency = 1
-    arrow.Text = "▼"
-    arrow.TextColor3 = Color3.fromRGB(150, 150, 150)
-    arrow.Font = Enum.Font.GothamBold
-    arrow.TextSize = 12
-    arrow.Parent = frame
-
-    local itemsContainer = Instance.new("Frame")
-    itemsContainer.Size = UDim2.new(1, 0, 0, 0)
-    itemsContainer.Position = UDim2.new(0, 0, 0, 42)
-    itemsContainer.BackgroundTransparency = 1
-    itemsContainer.Parent = frame
-
-    local listLayout = Instance.new("UIListLayout")
-    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    listLayout.Parent = itemsContainer
-
-    local isOpen = false
-    topBtn.MouseButton1Click:Connect(function()
-        isOpen = not isOpen
-        arrow.Text = isOpen and "▲" or "▼"
-        local targetHeight = isOpen and (42 + listLayout.AbsoluteContentSize.Y) or 42
-        TweenService:Create(frame, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, targetHeight)}):Play()
-    end)
-
-    for _, optName in ipairs(orderList) do
-        local optFrame = Instance.new("Frame")
-        optFrame.Size = UDim2.new(1, 0, 0, 34)
-        optFrame.BackgroundTransparency = 1
-        optFrame.Parent = itemsContainer
-
-        local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(1, -50, 1, 0)
-        lbl.Position = UDim2.new(0, 15, 0, 0)
-        lbl.BackgroundTransparency = 1
-        lbl.Text = optName
-        lbl.TextColor3 = Color3.fromRGB(200, 200, 200)
-        lbl.Font = Enum.Font.Gotham
-        lbl.TextSize = 13
-        lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.Parent = optFrame
-
-        local box = Instance.new("TextButton")
-        box.Size = UDim2.new(0, 20, 0, 20)
-        box.Position = UDim2.new(1, -35, 0.5, -10)
-        box.BackgroundColor3 = optionsDict[optName] and Color3.fromRGB(99, 102, 241) or Color3.fromRGB(60, 60, 65)
-        box.Text = ""
-        box.Parent = optFrame
-        Instance.new("UICorner", box).CornerRadius = UDim.new(0, 4)
-
-        box.MouseButton1Click:Connect(function()
-            optionsDict[optName] = not optionsDict[optName]
-            local targetColor = optionsDict[optName] and Color3.fromRGB(99, 102, 241) or Color3.fromRGB(60, 60, 65)
-            TweenService:Create(box, TweenInfo.new(0.2), {BackgroundColor3 = targetColor}):Play()
-        end)
-    end
-
-    listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        if isOpen then
-            frame.Size = UDim2.new(1, 0, 0, 42 + listLayout.AbsoluteContentSize.Y)
-        end
-    end)
-end
-
-local function CreateInput(parent, name, defaultValue, isNumber, callback)
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 0, 42)
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-    frame.Parent = parent
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(0.6, 0, 1, 0)
-    label.Position = UDim2.new(0, 15, 0, 0)
-    label.BackgroundTransparency = 1
-    label.Text = name
-    label.TextColor3 = Color3.fromRGB(243, 244, 246)
-    label.Font = Enum.Font.Gotham
-    label.TextSize = 13
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = frame
-
-    local box = Instance.new("TextBox")
-    box.Size = UDim2.new(0.35, -15, 0, 28)
-    box.Position = UDim2.new(0.65, 0, 0.5, -14)
-    box.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-    box.TextColor3 = Color3.fromRGB(255, 255, 255)
-    box.Text = tostring(defaultValue)
-    box.Font = Enum.Font.Gotham
-    box.TextSize = 13
-    box.Parent = frame
-    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 4)
-
-    box.FocusLost:Connect(function()
-        local val = box.Text
-        if isNumber then
-            val = tonumber(val) or defaultValue
-            box.Text = tostring(val)
-        end
-        callback(val)
-    end)
-end
-
-local function CreateLabel(parent, text)
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 0, 42)
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-    frame.Parent = parent
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -30, 1, 0)
-    label.Position = UDim2.new(0, 15, 0, 0)
-    label.BackgroundTransparency = 1
-    label.Text = text
-    label.TextColor3 = Color3.fromRGB(99, 102, 241)
-    label.Font = Enum.Font.GothamBold
-    label.TextSize = 14
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = frame
-    return label
-end
-
-local function CreateButton(parent, text, callback)
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 0, 42)
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-    frame.Parent = parent
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
-
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 1, 0)
-    btn.BackgroundTransparency = 1
+local function createTabBtn(text, pos, widthStr)
+    local btn = Instance.new("TextButton", tabBar)
+    btn.Size = UDim2.new(widthStr, 0, 1, 0)
+    btn.Position = pos
     btn.Text = text
-    btn.TextColor3 = Color3.fromRGB(243, 244, 246)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 13
-    btn.Parent = frame
-
-    btn.MouseButton1Click:Connect(function()
-        TweenService:Create(btn, TweenInfo.new(0.1), {TextColor3 = Color3.fromRGB(99, 102, 241)}):Play()
-        task.delay(0.1, function()
-            if btn.Parent then
-                TweenService:Create(btn, TweenInfo.new(0.1), {TextColor3 = Color3.fromRGB(243, 244, 246)}):Play()
-            end
-        end)
-        callback()
-    end)
-
+    btn.BackgroundColor3 = Theme.TabBG
+    btn.TextColor3 = Theme.Text
+    btn.Font = Enum.Font.Code
+    btn.BorderSizePixel = 0
+    btn.TextSize = 11
     return btn
 end
 
--- ==========================================
--- // Populate GUI
--- ==========================================
-local TabMain = CreateTab("Main Controls")
-CreateToggle(TabMain, "Auto Farm Crystals", State.AutoFarm, function(v) State.AutoFarm = v end)
-CreateToggle(TabMain, "Auto Sell (When Bag Full)", State.AutoSell, function(v) State.AutoSell = v end)
-CreateToggle(TabMain, "Instant React Prompt", State.InstantPrompt, function(v) State.InstantPrompt = v end)
-CreateInput(TabMain, "Tween Speed (Studs/s)", State.TweenSpeed, true, function(v) State.TweenSpeed = v end)
+-- Tabs
+local btnTabMain = createTabBtn("Main", UDim2.new(0, 0, 0, 0), 0.334)
+local btnTabMods = createTabBtn("Mods", UDim2.new(0.334, 0, 0, 0), 0.333)
+local btnTabMisc = createTabBtn("Misc", UDim2.new(0.667, 0, 0, 0), 0.333)
+btnTabMain.BackgroundColor3 = Theme.Active -- Default active
 
-local TabLocal = CreateTab("Local Player")
-CreateToggle(TabLocal, "Infinite Jump", State.InfJump, function(v) State.InfJump = v end)
-CreateToggle(TabLocal, "Enable WalkSpeed", State.SpeedEnabled, function(v) State.SpeedEnabled = v end)
-CreateInput(TabLocal, "Player WalkSpeed", State.PlayerSpeed, true, function(v) State.PlayerSpeed = v end)
-CreateButton(TabLocal, "Add 999T Luck & Boosts", function()
-    local RealStats = getRealStats()
-    if RealStats then
-        local targetStats = {
-            "CoinBoostSeconds",
-            "LuckStacks",
-            "LuckBoostRemaining",
-            "PlotLuck",
-            "UltraLuckBoostRemaining"
-        }
-        for _, statName in ipairs(targetStats) do
-            local stat = RealStats:FindFirstChild(statName)
-            if stat then
-                pcall(function()
-                    stat.Value = stat.Value + 999999999999999
-                end)
+-- Content Container with Scroll
+local contentFrame = Instance.new("Frame", frame)
+contentFrame.Size = UDim2.new(1, 0, 1, -55)
+contentFrame.Position = UDim2.new(0, 0, 0, 55)
+contentFrame.BackgroundTransparency = 1
+contentFrame.ClipsDescendants = true
+
+local scrolling = Instance.new("ScrollingFrame", contentFrame)
+scrolling.Size = UDim2.new(1, 0, 1, 0)
+scrolling.BackgroundTransparency = 1
+scrolling.BorderSizePixel = 0
+scrolling.CanvasSize = UDim2.new(0, 0, 0, 800)
+scrolling.ScrollBarThickness = 6
+
+local tabMain = Instance.new("Frame", scrolling)
+tabMain.Size = UDim2.new(1, 0, 1, 0)
+tabMain.BackgroundTransparency = 1
+
+local tabMods = Instance.new("Frame", scrolling)
+tabMods.Size = UDim2.new(1, 0, 1, 0)
+tabMods.BackgroundTransparency = 1
+tabMods.Visible = false
+
+local tabMisc = Instance.new("Frame", scrolling)
+tabMisc.Size = UDim2.new(1, 0, 1, 0)
+tabMisc.BackgroundTransparency = 1
+tabMisc.Visible = false
+
+-- Helper to create rounded buttons/inputs
+local function createUIElement(className, parent, pos, text)
+    local el = Instance.new(className, parent)
+    el.Size = UDim2.new(0.9, 0, 0, 28)
+    el.Position = pos
+    el.Text = text
+    el.BackgroundColor3 = Theme.Button
+    el.TextColor3 = Theme.Text
+    el.Font = Enum.Font.Code
+    el.TextSize = 12
+    Instance.new("UICorner", el).CornerRadius = UDim.new(0, 6)
+    return el
+end
+
+-- === MAIN TAB ELEMENTS ===
+local lblTargetTitle = Instance.new("TextLabel", tabMain)
+lblTargetTitle.Size = UDim2.new(0.9, 0, 0, 20)
+lblTargetTitle.Position = UDim2.new(0.05, 0, 0, 5)
+lblTargetTitle.Text = "Target Vehicle:"
+lblTargetTitle.TextColor3 = Color3.fromRGB(255, 200, 100)
+lblTargetTitle.Font = Enum.Font.Code
+lblTargetTitle.BackgroundTransparency = 1
+lblTargetTitle.TextXAlignment = Enum.TextXAlignment.Left
+lblTargetTitle.TextSize = 12
+
+local btnPrevVeh = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 25), "<")
+btnPrevVeh.Size = UDim2.new(0.15, 0, 0, 24)
+
+local lblSelectedVeh = Instance.new("TextLabel", tabMain)
+lblSelectedVeh.Size = UDim2.new(0.55, 0, 0, 24)
+lblSelectedVeh.Position = UDim2.new(0.225, 0, 0, 25)
+lblSelectedVeh.Text = "None"
+lblSelectedVeh.TextColor3 = Color3.fromRGB(100, 255, 100)
+lblSelectedVeh.Font = Enum.Font.Code
+lblSelectedVeh.BackgroundTransparency = 1
+lblSelectedVeh.TextSize = 12
+lblSelectedVeh.TextScaled = true
+
+local btnNextVeh = createUIElement("TextButton", tabMain, UDim2.new(0.8, 0, 0, 25), ">")
+btnNextVeh.Size = UDim2.new(0.15, 0, 0, 24)
+
+-- Drill Multiplier
+local lblDrill = Instance.new("TextLabel", tabMain)
+lblDrill.Size = UDim2.new(0.9, 0, 0, 20)
+lblDrill.Position = UDim2.new(0.05, 0, 0, 55)
+lblDrill.Text = "Drill Multiplier (e.g. 5):"
+lblDrill.TextColor3 = Theme.Text
+lblDrill.Font = Enum.Font.Code
+lblDrill.BackgroundTransparency = 1
+lblDrill.TextXAlignment = Enum.TextXAlignment.Left
+
+local txtDrillSize = createUIElement("TextBox", tabMain, UDim2.new(0.05, 0, 0, 75), "1")
+txtDrillSize.PlaceholderText = "1"
+txtDrillSize.ClearTextOnFocus = false
+
+-- Status & Main Buttons
+local lblStatus = Instance.new("TextLabel", tabMain)
+lblStatus.Size = UDim2.new(0.9, 0, 0, 20)
+lblStatus.Position = UDim2.new(0.05, 0, 0, 115)
+lblStatus.Text = "Status: Idle"
+lblStatus.TextColor3 = Theme.Text
+lblStatus.Font = Enum.Font.Code
+lblStatus.BackgroundTransparency = 1
+lblStatus.TextSize = 12
+lblStatus.TextXAlignment = Enum.TextXAlignment.Left
+
+local lblCountdown = Instance.new("TextLabel", tabMain)
+lblCountdown.Size = UDim2.new(0.9, 0, 0, 20)
+lblCountdown.Position = UDim2.new(0.05, 0, 0, 135)
+lblCountdown.Text = "Cargo: N/A"
+lblCountdown.TextColor3 = Theme.Text
+lblCountdown.Font = Enum.Font.Code
+lblCountdown.BackgroundTransparency = 1
+lblCountdown.TextSize = 12
+lblCountdown.TextXAlignment = Enum.TextXAlignment.Left
+
+local btnStart = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 165), "Start")
+local btnPause = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 200), "Pause")
+local btnForceUnload = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 235), "Force Unload")
+
+-- === MODS TAB ELEMENTS ===
+local lblSpeed = Instance.new("TextLabel", tabMods)
+lblSpeed.Size = UDim2.new(0.9, 0, 0, 20)
+lblSpeed.Position = UDim2.new(0.05, 0, 0, 10)
+lblSpeed.Text = "WalkSpeed (e.g. 64):"
+lblSpeed.TextColor3 = Theme.Text
+lblSpeed.Font = Enum.Font.Code
+lblSpeed.BackgroundTransparency = 1
+lblSpeed.TextXAlignment = Enum.TextXAlignment.Left
+
+local txtWalkSpeed = createUIElement("TextBox", tabMods, UDim2.new(0.05, 0, 0, 30), "16")
+txtWalkSpeed.PlaceholderText = "16"
+txtWalkSpeed.ClearTextOnFocus = false
+
+-- === NEW: EVASION TOGGLE & SETTINGS ===
+local evasionEnabled = true
+
+local btnToggleEvasion = createUIElement("TextButton", tabMods, UDim2.new(0.05, 0, 0, 70), "Auto-Evasion: ON")
+btnToggleEvasion.BackgroundColor3 = Color3.fromRGB(100, 150, 100)
+
+local lblEvasionAngle = Instance.new("TextLabel", tabMods)
+lblEvasionAngle.Size = UDim2.new(0.9, 0, 0, 20)
+lblEvasionAngle.Position = UDim2.new(0.05, 0, 0, 110)
+lblEvasionAngle.Text = "Evasion Angle (Deg):"
+lblEvasionAngle.TextColor3 = Theme.Text
+lblEvasionAngle.Font = Enum.Font.Code
+lblEvasionAngle.BackgroundTransparency = 1
+lblEvasionAngle.TextXAlignment = Enum.TextXAlignment.Left
+
+local txtEvasionAngle = createUIElement("TextBox", tabMods, UDim2.new(0.05, 0, 0, 130), "60")
+txtEvasionAngle.PlaceholderText = "60"
+txtEvasionAngle.ClearTextOnFocus = false
+
+btnToggleEvasion.MouseButton1Click:Connect(function()
+    evasionEnabled = not evasionEnabled
+    if evasionEnabled then
+        btnToggleEvasion.Text = "Auto-Evasion: ON"
+        btnToggleEvasion.BackgroundColor3 = Color3.fromRGB(100, 150, 100)
+    else
+        btnToggleEvasion.Text = "Auto-Evasion: OFF"
+        btnToggleEvasion.BackgroundColor3 = Theme.Button
+    end
+end)
+
+-- === NEW: CAMERA/COMPASS OFFSET ===
+local lblFrontOffset = Instance.new("TextLabel", tabMods)
+lblFrontOffset.Size = UDim2.new(0.9, 0, 0, 20)
+lblFrontOffset.Position = UDim2.new(0.05, 0, 0, 170)
+lblFrontOffset.Text = "Vehicle Front Offset (Deg):"
+lblFrontOffset.TextColor3 = Theme.Text
+lblFrontOffset.Font = Enum.Font.Code
+lblFrontOffset.BackgroundTransparency = 1
+lblFrontOffset.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Changed default from -90 to 90 (if -90 looked left, 90 or 0 should look front!)
+local txtFrontOffset = createUIElement("TextBox", tabMods, UDim2.new(0.05, 0, 0, 190), "90")
+txtFrontOffset.PlaceholderText = "90"
+txtFrontOffset.ClearTextOnFocus = false
+
+local btnTestCam = createUIElement("TextButton", tabMods, UDim2.new(0.05, 0, 0, 230), "Test Camera Alignment")
+btnTestCam.BackgroundColor3 = Color3.fromRGB(100, 100, 150)
+
+-- === MISC TAB ELEMENTS ===
+local btnTpPlot = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 15), "TP to Plot")
+local btnExplode = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 50), "Spawn Explosion")
+local btnAntiLag = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 85), "Anti-Lag (Boost FPS)")
+local btnTerminate = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0, 200), "Terminate")
+
+-- Tab Switching Logic
+local function switchTab(tabName)
+    btnTabMain.BackgroundColor3 = Theme.TabBG
+    btnTabMods.BackgroundColor3 = Theme.TabBG
+    btnTabMisc.BackgroundColor3 = Theme.TabBG
+    
+    tabMain.Visible = false
+    tabMods.Visible = false
+    tabMisc.Visible = false
+    
+    if tabName == "Main" then
+        btnTabMain.BackgroundColor3 = Theme.Active
+        tabMain.Visible = true
+    elseif tabName == "Mods" then
+        btnTabMods.BackgroundColor3 = Theme.Active
+        tabMods.Visible = true
+    elseif tabName == "Misc" then
+        btnTabMisc.BackgroundColor3 = Theme.Active
+        tabMisc.Visible = true
+    end
+end
+
+btnTabMain.MouseButton1Click:Connect(function() switchTab("Main") end)
+btnTabMods.MouseButton1Click:Connect(function() switchTab("Mods") end)
+btnTabMisc.MouseButton1Click:Connect(function() switchTab("Misc") end)
+
+-- Wire up the test button so you can calibrate without waiting for the macro
+btnTestCam.MouseButton1Click:Connect(function()
+    if targetedVehicle then
+        alignCameraWithVehicle()
+        lblStatus.Text = "Status: Camera Tested!"
+    else
+        lblStatus.Text = "Status: Select a vehicle first!"
+    end
+end)
+
+-- ==========================================
+-- 2. Vehicle Selector Logic
+-- ==========================================
+local currentVehicleIndex = 0
+local vehicleList = {}
+
+local function getVehicleOwnerName(vehicle)
+    if not vehicle then return "Unknown" end
+    
+    local ownerAttr = vehicle:GetAttribute("Owner") or vehicle:GetAttribute("Player") or vehicle:GetAttribute("Driver")
+    if type(ownerAttr) == "string" and ownerAttr ~= "" then
+        return ownerAttr
+    elseif type(ownerAttr) == "number" then
+        local p = Players:GetPlayerByUserId(ownerAttr)
+        if p then return p.Name end
+        return tostring(ownerAttr)
+    end
+    
+    local ownerVal = vehicle:FindFirstChild("Owner") or vehicle:FindFirstChild("Player") or vehicle:FindFirstChild("Driver")
+    if ownerVal then
+        if ownerVal:IsA("StringValue") and ownerVal.Value ~= "" then
+            return ownerVal.Value
+        elseif ownerVal:IsA("ObjectValue") and ownerVal.Value then
+            return ownerVal.Value.Name
+        end
+    end
+    
+    local seat = vehicle:FindFirstChildWhichIsA("VehicleSeat", true)
+    if seat and seat.Occupant and seat.Occupant.Parent then
+        return seat.Occupant.Parent.Name
+    end
+    
+    return "Unknown"
+end
+
+local function refreshVehicleList()
+    vehicleList = {}
+    local vehiclesFolder = workspace:FindFirstChild("Vehicles")
+    if vehiclesFolder then
+        for _, v in ipairs(vehiclesFolder:GetChildren()) do
+            if v:IsA("Model") then
+                table.insert(vehicleList, v)
             end
+        end
+    end
+end
+
+local function updateVehicleSelection()
+    if #vehicleList == 0 then
+        targetedVehicle = nil
+        lblSelectedVeh.Text = "None Found"
+        lblSelectedVeh.TextColor3 = Color3.fromRGB(255, 100, 100)
+    else
+        if currentVehicleIndex < 1 then currentVehicleIndex = #vehicleList end
+        if currentVehicleIndex > #vehicleList then currentVehicleIndex = 1 end
+        
+        targetedVehicle = vehicleList[currentVehicleIndex]
+        local ownerName = getVehicleOwnerName(targetedVehicle)
+        lblSelectedVeh.Text = targetedVehicle.Name .. " (" .. ownerName .. ")"
+        lblSelectedVeh.TextColor3 = Color3.fromRGB(100, 255, 100)
+    end
+end
+
+btnPrevVeh.MouseButton1Click:Connect(function()
+    refreshVehicleList()
+    currentVehicleIndex = currentVehicleIndex - 1
+    updateVehicleSelection()
+end)
+
+btnNextVeh.MouseButton1Click:Connect(function()
+    refreshVehicleList()
+    currentVehicleIndex = currentVehicleIndex + 1
+    updateVehicleSelection()
+end)
+
+-- Initial Auto-Scan for vehicles
+task.spawn(function()
+    task.wait(1)
+    refreshVehicleList()
+    if #vehicleList > 0 then
+        currentVehicleIndex = 1 
+        
+        for i, v in ipairs(vehicleList) do
+            local ownerName = getVehicleOwnerName(v)
+            if ownerName == player.Name or ownerName == tostring(player.UserId) then
+                currentVehicleIndex = i
+                break
+            end
+        end
+        
+        updateVehicleSelection()
+    end
+end)
+
+-- ==========================================
+-- 3. Helper Functions & Scanners
+-- ==========================================
+local function pressKey(keyCode, delayTime)
+    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+    task.wait(delayTime or 0.05)
+    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+end
+
+local function holdKey(keyCode)
+    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+end
+
+local function releaseKey(keyCode)
+    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+end
+
+local function teleport(cframe)
+    local hrp = getHRP()
+    if hrp and cframe then
+        hrp.CFrame = cframe
+        task.wait(0.1)
+    end
+end
+
+local function safeWait(waitTime)
+    local elapsed = 0
+    while elapsed < waitTime do
+        if not isRunning then break end
+        
+        if isPaused then
+            local prevStatus = lblStatus.Text
+            lblStatus.Text = "Status: PAUSED"
+            releaseKey(Enum.KeyCode.W)
+            releaseKey(Enum.KeyCode.S)
+            
+            repeat task.wait(0.2) until not isPaused or not isRunning
+            
+            if not isRunning then break end
+            lblStatus.Text = prevStatus
+            
+            if string.find(prevStatus, "Mining") or string.find(prevStatus, "Drive") then
+                holdKey(Enum.KeyCode.W)
+            elseif string.find(prevStatus, "Backing") then
+                holdKey(Enum.KeyCode.S)
+            end
+        end
+        
+        task.wait(0.1)
+        elapsed = elapsed + 0.1
+    end
+end
+
+-- DYNAMIC UNLOADER SCANNER
+local function getUnloaderCFrame()
+    pcall(function()
+        local fgi = workspace:FindFirstChild("FactoryGridItemsClient")
+        if not fgi then return end
+        
+        local pFolder1 = fgi:FindFirstChild(player.Name)
+        if not pFolder1 then return end
+        
+        local pFolder2 = pFolder1:FindFirstChild(player.Name)
+        if not pFolder2 then return end
+        
+        for _, child in ipairs(pFolder2:GetChildren()) do
+            if string.find(string.lower(child.Name), "unloader") then
+                local prompt = child:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then
+                    wp1 = prompt.Parent.CFrame + Vector3.new(0, 3, 0)
+                    return
+                end
+                wp1 = child:GetPivot() + Vector3.new(0, 3, 0)
+                return
+            end
+        end
+    end)
+    return wp1
+end
+
+-- TARGETED VEHICLE SCANNER
+local function getVehicleCargoData()
+    local isFull = false
+    local cargoText = nil
+    
+    pcall(function()
+        if targetedVehicle and targetedVehicle.Parent then
+            local vehicle = targetedVehicle
+            
+            local cargoVolume = vehicle:FindFirstChild("CargoVolume")
+            if cargoVolume then
+                local currentCount = #cargoVolume:GetChildren()
+                local estimatedOres = math.floor(currentCount / (MAX_CARGO_CHILDREN / VEHICLE_CAPACITY))
+                if estimatedOres > VEHICLE_CAPACITY then estimatedOres = VEHICLE_CAPACITY end
+                
+                cargoText = tostring(estimatedOres) .. " / " .. tostring(VEHICLE_CAPACITY) .. " [Raw: " .. tostring(currentCount) .. "]"
+                if currentCount >= MAX_CARGO_CHILDREN then isFull = true end
+                return 
+            end
+            
+            local current = vehicle:GetAttribute("StoredOres") or vehicle:GetAttribute("Cargo") or vehicle:GetAttribute("OreCount")
+            local maxCap = vehicle:GetAttribute("Capacity") or vehicle:GetAttribute("MaxCapacity")
+            
+            if current and maxCap then
+                cargoText = tostring(current) .. " / " .. tostring(maxCap)
+                if tonumber(current) >= tonumber(maxCap) then isFull = true end
+                return
+            end
+        end
+    end)
+    
+    return isFull, cargoText
+end
+
+-- HELPER TO GET TRUE FORWARD VECTOR (WITH OFFSET FIX)
+local function getTrueVehicleLookVector()
+    local baseVector = Vector3.new(0, 0, -1)
+    
+    if targetedVehicle and targetedVehicle.Parent then
+        local seat = targetedVehicle:FindFirstChildWhichIsA("VehicleSeat", true)
+        if seat then
+            baseVector = seat.CFrame.LookVector
+        else
+            baseVector = targetedVehicle:GetPivot().LookVector
+        end
+    end
+    
+    -- Apply Rotation Offset to fix sideway vehicles
+    local offsetDeg = tonumber(txtFrontOffset.Text) or 0
+    if offsetDeg ~= 0 then
+        local rad = math.rad(offsetDeg)
+        local cosT = math.cos(rad)
+        local sinT = math.sin(rad)
+        
+        -- Rotate vector around the Y axis
+        local rx = baseVector.X * cosT - baseVector.Z * sinT
+        local rz = baseVector.X * sinT + baseVector.Z * cosT
+        baseVector = Vector3.new(rx, baseVector.Y, rz).Unit
+    end
+    
+    return baseVector
+end
+
+-- VEHICLE POSITION SCANNER
+local function getVehiclePosition()
+    if targetedVehicle and targetedVehicle.Parent then
+        return targetedVehicle:GetPivot().Position
+    end
+    -- Fallback to player position if vehicle isn't locked
+    local hrp = getHRP()
+    if hrp then return hrp.Position end
+    return nil
+end
+
+-- VEHICLE HEADING COMPASS
+local function getVehicleHeading()
+    local lv = getTrueVehicleLookVector()
+    -- Calculate yaw angle in degrees (0 to 360)
+    local deg = math.deg(math.atan2(lv.X, -lv.Z))
+    if deg < 0 then deg = deg + 360 end
+    return deg
+end
+
+local function getShortestAngle(target, current)
+    -- Returns the shortest difference between two angles (-180 to 180)
+    return (target - current + 180) % 360 - 180
+end
+
+-- CAMERA ALIGNMENT SENSOR
+local function alignCameraWithVehicle()
+    local camera = workspace.CurrentCamera
+    if targetedVehicle and targetedVehicle.Parent and camera then
+        local lookDir = getTrueVehicleLookVector()
+        
+        -- Flatten the Y axis so the camera doesn't look straight into the ground or sky
+        local flatLookDir = Vector3.new(lookDir.X, 0, lookDir.Z)
+        if flatLookDir.Magnitude > 0.001 then
+            flatLookDir = flatLookDir.Unit
+            camera.CFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + flatLookDir)
+        else
+            camera.CFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + lookDir)
+        end
+    end
+end
+
+-- ==========================================
+-- 4. Core Logic Functions
+-- ==========================================
+local function unloadFunc()
+    if not isRunning then return end
+    
+    lblStatus.Text = "Status: Unloading..."
+    lblCountdown.Text = "Cargo: N/A"
+    
+    -- Align camera before starting the unload sequence
+    alignCameraWithVehicle()
+    task.wait(0.1)
+    
+    pressKey(Enum.KeyCode.E, 0.1)
+    safeWait(0.28)
+    
+    local hrp = getHRP()
+    if hrp then wp2 = hrp.CFrame end
+    
+    for i = 1, 4 do
+        teleport(wp1)
+        safeWait(0.18)
+        pressKey(Enum.KeyCode.E, 0.1)
+        safeWait(0.28)
+        
+        teleport(wp2)
+        safeWait(0.18)
+        if i < 4 then
+            pressKey(Enum.KeyCode.E, 0.1)
+            safeWait(0.28)
+        end
+    end
+
+    lblStatus.Text = "Status: Walking to Drive..."
+    holdKey(Enum.KeyCode.W)
+    safeWait(2) 
+    releaseKey(Enum.KeyCode.W)
+    
+    safeWait(0.28)
+    pressKey(Enum.KeyCode.E, 0.1) 
+end
+
+local function mineFunc()
+    if not isRunning then return end
+    
+    lblStatus.Text = "Status: Mining..."
+    lblCountdown.Text = "Cargo: Checking..."
+    
+    holdKey(Enum.KeyCode.W)
+    
+    local lastCheckTime = tick()
+    local lastPos = getVehiclePosition()
+    
+    while isRunning do
+        local isFull, cargoText = getVehicleCargoData()
+        
+        if cargoText then
+            lblCountdown.Text = "Cargo: " .. cargoText
+        else
+            lblCountdown.Text = "Cargo: Target missing!"
+        end
+        
+        if forceUnloadTrigger or isFull then
+            forceUnloadTrigger = false
+            break
+        end
+        
+        -- ====================================
+        -- STUCK DETECTION & EVASION LOGIC
+        -- ====================================
+        if evasionEnabled and tick() - lastCheckTime >= 2 then
+            local currentPos = getVehiclePosition()
+            if currentPos and lastPos then
+                local dist = (currentPos - lastPos).Magnitude
+                
+                -- If we moved less than 2 studs in 2 seconds, we are stuck!
+                if dist < 2.0 then
+                    local dodgeAngle = tonumber(txtEvasionAngle.Text) or 60
+                    lblStatus.Text = "Status: Stuck! Reversing..."
+                    releaseKey(Enum.KeyCode.W)
+                    
+                    -- Record original heading before evasion
+                    local originalHeading = getVehicleHeading()
+                    
+                    -- 1. Reverse for 5 seconds
+                    holdKey(Enum.KeyCode.S)
+                    for _ = 1, 10 do -- 10 * 0.5s = 5 seconds
+                        safeWait(0.5)
+                        if not isRunning or forceUnloadTrigger then break end
+                    end
+                    releaseKey(Enum.KeyCode.S)
+                    
+                    if isRunning and not forceUnloadTrigger then
+                        lblStatus.Text = "Status: Dodging Obstacle..."
+                        
+                        -- Randomly pick a direction to prevent wall hugging
+                        local dodgeRight = math.random() > 0.5
+                        local turnKey = dodgeRight and Enum.KeyCode.D or Enum.KeyCode.A
+                        local counterKey = dodgeRight and Enum.KeyCode.A or Enum.KeyCode.D
+                        
+                        -- Target heading offset by our 60 degrees (or configured setting)
+                        local targetHeading = (originalHeading + (dodgeRight and dodgeAngle or -dodgeAngle)) % 360
+                        
+                        -- 2. Turn to target angle (using compass)
+                        holdKey(turnKey)
+                        holdKey(Enum.KeyCode.W)
+                        local turnStart = tick()
+                        while isRunning and not forceUnloadTrigger and (tick() - turnStart < 5) do -- 5s safety timeout
+                            local currentHeading = getVehicleHeading()
+                            local diff = math.abs(getShortestAngle(targetHeading, currentHeading))
+                            if diff <= 10 then -- Stop when within 10 degrees of target
+                                break
+                            end
+                            task.wait(0.1)
+                        end
+                        releaseKey(turnKey)
+                        
+                        -- 3. Drive forward for 10 seconds to bypass
+                        local brokeEarly = false
+                        for _ = 1, 20 do -- 20 * 0.5s = 10 seconds
+                            safeWait(0.5)
+                            -- Continuously check cargo so we don't overfill during the 10s drive
+                            local currentIsFull, currentCargoText = getVehicleCargoData()
+                            if currentCargoText then lblCountdown.Text = "Cargo: " .. currentCargoText end
+                            if currentIsFull or forceUnloadTrigger or not isRunning then 
+                                brokeEarly = true
+                                break 
+                            end
+                        end
+                        
+                        -- 4. Turn opposite direction to correct the angle back to original
+                        if isRunning and not forceUnloadTrigger and not brokeEarly then
+                            lblStatus.Text = "Status: Correcting Angle..."
+                            holdKey(counterKey)
+                            holdKey(Enum.KeyCode.W)
+                            local correctStart = tick()
+                            while isRunning and not forceUnloadTrigger and (tick() - correctStart < 5) do
+                                local currentHeading = getVehicleHeading()
+                                local diff = math.abs(getShortestAngle(originalHeading, currentHeading))
+                                if diff <= 10 then -- Stop when within 10 degrees of original heading
+                                    break
+                                end
+                                task.wait(0.1)
+                            end
+                            releaseKey(counterKey)
+                        end
+                        
+                        lblStatus.Text = "Status: Mining..."
+                        holdKey(Enum.KeyCode.W) -- Re-ensure W is held
+                    end
+                end
+            end
+            lastPos = currentPos
+            lastCheckTime = tick()
+        end
+        -- ====================================
+        
+        safeWait(0.5) 
+    end
+    
+    -- Safely release all movement keys just in case we broke out during a dodge
+    releaseKey(Enum.KeyCode.W)
+    releaseKey(Enum.KeyCode.A)
+    releaseKey(Enum.KeyCode.S)
+    releaseKey(Enum.KeyCode.D)
+    
+    if not isRunning then return end
+    
+    task.wait(0.1)
+    
+    -- Make sure camera is aligned with vehicle before exiting
+    alignCameraWithVehicle()
+    task.wait(0.1)
+    
+    lblStatus.Text = "Status: Exiting Vehicle..."
+    pressKey(Enum.KeyCode.Space, 0.1)
+    safeWait(0.5)
+    
+    lblStatus.Text = "Status: Backing up..."
+    holdKey(Enum.KeyCode.S)
+    safeWait(2.5) 
+    releaseKey(Enum.KeyCode.S)
+end
+
+-- ==========================================
+-- MODIFIERS (Read from TextBoxes)
+-- ==========================================
+local function applyDrillSizeMulti()
+    local multi = tonumber(txtDrillSize.Text) or 1
+    
+    pcall(function()
+        if targetedVehicle and targetedVehicle.Parent then
+            local body = targetedVehicle:FindFirstChild("Body")
+            local drillZone = body and body:FindFirstChild("DrillZone")
+            
+            -- Fallback deep search if not found in Body
+            if not drillZone then
+                drillZone = targetedVehicle:FindFirstChild("DrillZone", true)
+            end
+            
+            if drillZone and drillZone:IsA("BasePart") then
+                if not drillZone:GetAttribute("OriginalSize") then
+                    drillZone:SetAttribute("OriginalSize", drillZone.Size)
+                end
+                
+                local origSize = drillZone:GetAttribute("OriginalSize")
+                drillZone.Size = origSize * multi
+                
+                if multi > 1 then
+                    drillZone.Transparency = 0.5
+                else
+                    drillZone.Transparency = 1
+                end
+            end
+        end
+    end)
+end
+
+local function applyWalkSpeed()
+    local speed = tonumber(txtWalkSpeed.Text) or 16
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChild("Humanoid")
+        if hum then
+            hum.WalkSpeed = speed
+        end
+    end
+end
+
+-- Apply modifications periodically
+task.spawn(function()
+    while task.wait(0.5) do
+        applyDrillSizeMulti()
+        
+        local speed = tonumber(txtWalkSpeed.Text)
+        if speed and speed ~= 16 then
+            applyWalkSpeed()
         end
     end
 end)
 
-local TabFarmFilter = CreateTab("Farm Filters")
-CreateToggle(TabFarmFilter, "Apply Filters to Farm", State.Filters.Farm.Apply, function(v) State.Filters.Farm.Apply = v end)
-CreateInput(TabFarmFilter, "Min Value", State.Filters.Farm.MinValue, true, function(v) State.Filters.Farm.MinValue = v end)
-CreateInput(TabFarmFilter, "Min Weight", State.Filters.Farm.MinWeightKg, true, function(v) State.Filters.Farm.MinWeightKg = v end)
-CreateMultiDropdown(TabFarmFilter, "Filter by Tiers", State.Filters.Farm.Tiers, { "Mythic", "Legendary", "Epic", "Rare", "Uncommon", "Common" })
-
-local TabAura = CreateTab("Aura Settings")
-CreateToggle(TabAura, "Enable Aura Grab", State.GrabRadiusEnabled, function(v) State.GrabRadiusEnabled = v end)
-CreateToggle(TabAura, "Prevent Overweight Grabs", State.PreventOverweight, function(v) State.PreventOverweight = v end)
-CreateInput(TabAura, "Grab Radius", State.GrabRadius, true, function(v) State.GrabRadius = v end)
-CreateLabel(TabAura, "--- Aura Filters ---")
-CreateToggle(TabAura, "Apply Filters to Aura", State.Filters.Aura.Apply, function(v) State.Filters.Aura.Apply = v end)
-CreateInput(TabAura, "Min Value", State.Filters.Aura.MinValue, true, function(v) State.Filters.Aura.MinValue = v end)
-CreateInput(TabAura, "Min Weight", State.Filters.Aura.MinWeightKg, true, function(v) State.Filters.Aura.MinWeightKg = v end)
-CreateMultiDropdown(TabAura, "Filter by Tiers", State.Filters.Aura.Tiers, { "Mythic", "Legendary", "Epic", "Rare", "Uncommon", "Common" })
-
-local TabESP = CreateTab("ESP Settings")
-CreateToggle(TabESP, "Enable Visual ESP", State.ESP, function(v) State.ESP = v end)
-CreateLabel(TabESP, "--- ESP Filters ---")
-CreateToggle(TabESP, "Apply Filters to ESP", State.Filters.ESP.Apply, function(v) State.Filters.ESP.Apply = v end)
-CreateInput(TabESP, "Min Value", State.Filters.ESP.MinValue, true, function(v) State.Filters.ESP.MinValue = v end)
-CreateInput(TabESP, "Min Weight", State.Filters.ESP.MinWeightKg, true, function(v) State.Filters.ESP.MinWeightKg = v end)
-CreateMultiDropdown(TabESP, "Filter by Tiers", State.Filters.ESP.Tiers, { "Mythic", "Legendary", "Epic", "Rare", "Uncommon", "Common" })
-CreateLabel(TabESP, "--- ESP Visuals ---")
-CreateToggle(TabESP, "Show Crystal Value", State.ESPConfig.ShowValue, function(v) State.ESPConfig.ShowValue = v end)
-CreateToggle(TabESP, "Show Crystal Tier", State.ESPConfig.ShowTier, function(v) State.ESPConfig.ShowTier = v end)
-CreateToggle(TabESP, "Show Distance", State.ESPConfig.ShowDistance, function(v) State.ESPConfig.ShowDistance = v end)
-CreateInput(TabESP, "Text Size", State.ESPConfig.TextSize, true, function(v) State.ESPConfig.TextSize = v end)
-CreateInput(TabESP, "Color: Red (0-255)", State.ESPConfig.ColorR, true, function(v) State.ESPConfig.ColorR = math.clamp(v, 0, 255) end)
-CreateInput(TabESP, "Color: Green (0-255)", State.ESPConfig.ColorG, true, function(v) State.ESPConfig.ColorG = math.clamp(v, 0, 255) end)
-CreateInput(TabESP, "Color: Blue (0-255)", State.ESPConfig.ColorB, true, function(v) State.ESPConfig.ColorB = math.clamp(v, 0, 255) end)
-
 -- ==========================================
--- // Live Stats & Termination
+-- 5. Main Loop & Events
 -- ==========================================
-local TabStats = CreateTab("Live Stats")
-local CashLabel = CreateLabel(TabStats, "Cash: Loading...")
-local CarryLabel = CreateLabel(TabStats, "Capacity: Loading...")
-
-local TerminateBtn = Instance.new("TextButton")
-TerminateBtn.Size = UDim2.new(0.85, 0, 0, 34)
-TerminateBtn.Position = UDim2.new(0.075, 0, 1, -45)
-TerminateBtn.BackgroundColor3 = Color3.fromRGB(220, 38, 38)
-TerminateBtn.Text = "Terminate Hub"
-TerminateBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-TerminateBtn.Font = Enum.Font.GothamBold
-TerminateBtn.TextSize = 13
-TerminateBtn.Parent = Sidebar
-Instance.new("UICorner", TerminateBtn).CornerRadius = UDim.new(0, 6)
-
-TerminateBtn.MouseButton1Click:Connect(function()
-    State.HubRunning = false
-    if ActiveTween then ActiveTween:Cancel() end
-
-    for _, conn in ipairs(Connections) do
-        conn:Disconnect()
+local function mainLoop()
+    loopActive = true
+    while isRunning do
+        mineFunc()
+        if not isRunning then break end
+        unloadFunc()
+        task.wait(0.1)
     end
-    table.clear(Connections)
+    lblStatus.Text = "Status: Idle"
+    lblCountdown.Text = "Cargo: N/A"
+    loopActive = false
+end
 
-    for _, gui in pairs(ESPObjects) do
-        if gui then gui:Destroy() end
-    end
-    table.clear(ESPObjects)
-
-    if safeParent:FindFirstChild("CrystalNativeHub") then
-        safeParent.CrystalNativeHub:Destroy()
+local minimized = false
+btnMinimize.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    if minimized then
+        frame.Size = UDim2.new(0, 280, 0, 30)
+        scrolling.Visible = false
+        tabBar.Visible = false
+        btnMinimize.Text = "+"
+    else
+        frame.Size = UDim2.new(0, 280, 0, 400)
+        scrolling.Visible = true
+        tabBar.Visible = true
+        btnMinimize.Text = "-"
     end
 end)
 
-task.spawn(function()
-    while State.HubRunning and task.wait(1) do
-        local RealStats = getRealStats()
-        if RealStats then
-            if RealStats:FindFirstChild("Cash") then
-                CashLabel.Text = "Cash: $" .. formatNumber(RealStats.Cash.Value)
+local function startScript()
+    if not targetedVehicle then
+        btnStart.Text = "Select a Vehicle First!"
+        task.wait(1.5)
+        if not isRunning then btnStart.Text = "Start" end
+        return
+    end
+
+    getUnloaderCFrame()
+    
+    if not wp1 then
+        btnStart.Text = "Unloader Not Found!"
+        task.wait(1.5)
+        if not isRunning then btnStart.Text = "Start" end
+        return
+    end
+    
+    btnStart.Text = "Running..."
+    
+    if not isRunning then
+        isRunning = true
+        isPaused = false
+        forceUnloadTrigger = false
+        task.spawn(mainLoop)
+    end
+end
+btnStart.MouseButton1Click:Connect(startScript)
+
+btnPause.MouseButton1Click:Connect(function()
+    if not isRunning then return end
+    isPaused = not isPaused
+    if isPaused then
+        btnPause.Text = "Resume"
+    else
+        btnPause.Text = "Pause"
+    end
+end)
+
+btnForceUnload.MouseButton1Click:Connect(function()
+    if isRunning then
+        forceUnloadTrigger = true
+        lblStatus.Text = "Status: Forcing Unload..."
+    else
+        getUnloaderCFrame()
+        if not wp1 then
+            btnForceUnload.Text = "Unloader Not Found!"
+            task.wait(1.5)
+            btnForceUnload.Text = "Force Unload"
+            return
+        end
+        isRunning = true
+        task.spawn(function()
+            unloadFunc()
+            isRunning = false
+            lblStatus.Text = "Status: Idle"
+            lblCountdown.Text = "Cargo: N/A"
+        end)
+    end
+end)
+
+btnTpPlot.MouseButton1Click:Connect(function()
+    local plotId = player:GetAttribute("Plot") or player:GetAttribute("PlotID") or player:GetAttribute("PlotId") or player:GetAttribute("plot")
+    
+    if not plotId then
+        local plotVal = player:FindFirstChild("Plot") or player:FindFirstChild("PlotID") or player:FindFirstChild("PlotId")
+        if plotVal then plotId = plotVal.Value end
+    end
+
+    local plotsFolder = workspace:FindFirstChild("Plots")
+    local targetPlot = nil
+
+    if plotsFolder then
+        if plotId then targetPlot = plotsFolder:FindFirstChild(tostring(plotId)) end
+
+        if not targetPlot then
+            for _, plot in ipairs(plotsFolder:GetChildren()) do
+                local ownerAttr = plot:GetAttribute("Owner") or plot:GetAttribute("OwnerId") or plot:GetAttribute("Player")
+                if ownerAttr == player.Name or ownerAttr == player.UserId then
+                    targetPlot = plot
+                    break
+                end
+                
+                local ownerVal = plot:FindFirstChild("Owner") or plot:FindFirstChild("OwnerId")
+                if ownerVal and (ownerVal.Value == player.Name or ownerVal.Value == player.UserId) then
+                    targetPlot = plot
+                    break
+                end
             end
-            if RealStats:FindFirstChild("CarryWeight") then
-                CarryLabel.Text = "Carry Wght Capacity: " .. formatNumber(RealStats.CarryWeight.Value)
+        end
+
+        if targetPlot then
+            local targetCFrame = targetPlot:GetPivot()
+            if targetCFrame then
+                teleport(targetCFrame + Vector3.new(0, 10, 0))
+                lblStatus.Text = "Status: TP'd to Plot!"
             end
+        else
+            lblStatus.Text = "Status: Plot ID missing!"
+        end
+    else
+        lblStatus.Text = "Status: Plots folder missing!"
+    end
+end)
+
+btnExplode.MouseButton1Click:Connect(function()
+    local hrp = getHRP()
+    if hrp then
+        local explosion = Instance.new("Explosion")
+        explosion.Name = "Explosion"
+        explosion.BlastPressure = 10000
+        explosion.BlastRadius = 60
+        explosion.DestroyJointRadiusPercent = 0
+        explosion.ExplosionType = Enum.ExplosionType.NoCraters
+        explosion.Position = hrp.Position
+        explosion.Parent = workspace
+        
+        lblStatus.Text = "Status: Boom!"
+    else
+        lblStatus.Text = "Status: Spawn First!"
+    end
+end)
+
+btnAntiLag.MouseButton1Click:Connect(function()
+    lblStatus.Text = "Status: Applying Anti-Lag..."
+    task.spawn(function()
+        local Lighting = game:GetService("Lighting")
+        local Terrain = workspace:FindFirstChildOfClass('Terrain')
+        
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 9e9
+        Lighting.ShadowSoftness = 0
+        
+        if Terrain then
+            Terrain.WaterWaveSize = 0
+            Terrain.WaterWaveSpeed = 0
+            Terrain.WaterReflectance = 0
+            Terrain.WaterTransparency = 0
+        end
+        
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                obj.Material = Enum.Material.SmoothPlastic
+                obj.Reflectance = 0
+            elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                obj.Transparency = 1
+            elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") then
+                obj.Lifetime = NumberRange.new(0)
+            end
+        end
+        lblStatus.Text = "Status: Anti-Lag Applied!"
+    end)
+end)
+
+local function terminateScript()
+    isRunning = false
+    isPaused = false
+    releaseKey(Enum.KeyCode.W)
+    releaseKey(Enum.KeyCode.A)
+    releaseKey(Enum.KeyCode.S)
+    releaseKey(Enum.KeyCode.D)
+    screenGui:Destroy()
+    print("Script Terminated.")
+end
+
+btnTerminate.MouseButton1Click:Connect(terminateScript)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not gameProcessed then
+        if input.KeyCode == Enum.KeyCode.Zero then
+            startScript()
+        elseif input.KeyCode == Enum.KeyCode.LeftControl then
+            screenGui.Enabled = not screenGui.Enabled
         end
     end
 end)
