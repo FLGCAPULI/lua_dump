@@ -747,6 +747,15 @@ local function getSafeOrePosition(orePos)
     end
 end
 
+-- HELPER FOR SCREEN CENTER CLICKING
+local function getScreenCenter()
+    local cam = workspace.CurrentCamera
+    if cam then
+        return cam.ViewportSize / 2
+    end
+    return Vector2.new()
+end
+
 -- 1. AUTO UNLOAD LOOP
 task.spawn(function()
     while task.wait(0.5) do
@@ -776,92 +785,103 @@ task.spawn(function()
 end)
 
 -- 2. AUTO TP FARM LOOP
-local isFarmClickHeld = false
 task.spawn(function()
     while task.wait(0.1) do
         if isAutoFarming then
             -- Pause if we are currently unloading
             if isAutoUnloading and getOrePackCount() >= (tonumber(txtMaxOre.Text) or 50) then
-                if isFarmClickHeld then
-                    VirtualUser:Button1Up(Vector2.new())
-                    isFarmClickHeld = false
-                end
+                VirtualUser:Button1Up(getScreenCenter())
                 task.wait(1)
                 continue
             end
             
             local targetOre = getNearestOre(math.huge)
-            if targetOre then
+            local placedOre = workspace:FindFirstChild("PlacedOre")
+            
+            if targetOre and placedOre then
                 lblPlayerStatus.Text = "Status: TP Farming..."
                 local orePos = targetOre:IsA("Model") and targetOre:GetPivot().Position or targetOre.Position
                 local safePos = getSafeOrePosition(orePos)
                 
                 teleport(CFrame.lookAt(safePos, orePos))
-                
                 equipPickaxe()
-                local cam = workspace.CurrentCamera
-                if cam then cam.CFrame = CFrame.lookAt(cam.CFrame.Position, orePos) end
                 
-                -- Hold the click down instead of clicking repeatedly
-                if not isFarmClickHeld then
-                    VirtualUser:Button1Down(Vector2.new())
-                    isFarmClickHeld = true
+                local cam = workspace.CurrentCamera
+                local centerPos = getScreenCenter()
+                
+                -- Press and hold left click at the center of the screen
+                VirtualUser:Button1Down(centerPos)
+                VirtualInputManager:SendMouseButtonEvent(centerPos.X, centerPos.Y, 0, true, game, 1)
+                
+                -- Wait until this specific ore is destroyed or removed from PlacedOre
+                while isAutoFarming and targetOre and targetOre.Parent == placedOre do
+                    if isAutoUnloading and getOrePackCount() >= (tonumber(txtMaxOre.Text) or 50) then
+                        break -- Interrupt to go unload
+                    end
+                    
+                    -- Keep camera locked onto it so the center of the screen hits the ore
+                    if cam then cam.CFrame = CFrame.lookAt(cam.CFrame.Position, orePos) end
+                    
+                    -- Backup activation just in case
+                    local tool = player.Character and player.Character:FindFirstChildOfClass("Tool")
+                    if tool then tool:Activate() end
+                    
+                    task.wait(0.1)
                 end
+                
+                -- Release click when the ore is gone
+                VirtualUser:Button1Up(centerPos)
+                VirtualInputManager:SendMouseButtonEvent(centerPos.X, centerPos.Y, 0, false, game, 1)
             else
-                -- Release click when there are no ores nearby
-                if isFarmClickHeld then
-                    VirtualUser:Button1Up(Vector2.new())
-                    isFarmClickHeld = false
-                end
                 lblPlayerStatus.Text = "Status: Waiting for Ores..."
                 task.wait(1)
-            end
-        else
-            -- Release click if feature is turned off
-            if isFarmClickHeld then
-                VirtualUser:Button1Up(Vector2.new())
-                isFarmClickHeld = false
             end
         end
     end
 end)
 
 -- 3. ORE AURA LOOP
-local isAuraClickHeld = false
 task.spawn(function()
     while task.wait(0.1) do
         if isOreAura then
             local radius = tonumber(txtAuraRadius.Text) or 15
             local targetOre = getNearestOre(radius)
+            local placedOre = workspace:FindFirstChild("PlacedOre")
             
-            if targetOre then
+            if targetOre and placedOre then
                 if not isAutoFarming then lblPlayerStatus.Text = "Status: Aura Mining..." end
                 equipPickaxe()
                 
-                local orePos = targetOre:IsA("Model") and targetOre:GetPivot().Position or targetOre.Position
-                local hrp = getHRP()
+                local centerPos = getScreenCenter()
                 
-                -- Turn character slightly to face ore (no camera snap) so the click registers
-                if hrp then hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(orePos.X, hrp.Position.Y, orePos.Z)) end
+                -- Press and hold left click
+                VirtualUser:Button1Down(centerPos)
+                VirtualInputManager:SendMouseButtonEvent(centerPos.X, centerPos.Y, 0, true, game, 1)
                 
-                -- Hold the click down instead of clicking repeatedly
-                if not isAuraClickHeld then
-                    VirtualUser:Button1Down(Vector2.new())
-                    isAuraClickHeld = true
+                -- Wait until the ore is destroyed
+                while isOreAura and targetOre and targetOre.Parent == placedOre do
+                    local orePos = targetOre:IsA("Model") and targetOre:GetPivot().Position or targetOre.Position
+                    local hrp = getHRP()
+                    
+                    -- Turn character slightly to face ore so the hit registers
+                    if hrp then hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(orePos.X, hrp.Position.Y, orePos.Z)) end
+                    
+                    local tool = player.Character and player.Character:FindFirstChildOfClass("Tool")
+                    if tool then tool:Activate() end
+                    
+                    task.wait(0.1)
+                    
+                    -- If we manually walk away from the ore, break the lock so we don't swing forever
+                    if hrp and (hrp.Position - orePos).Magnitude > radius + 5 then
+                        break
+                    end
                 end
+                
+                -- Release click
+                VirtualUser:Button1Up(centerPos)
+                VirtualInputManager:SendMouseButtonEvent(centerPos.X, centerPos.Y, 0, false, game, 1)
             else
-                -- Release click when there are no ores nearby
-                if isAuraClickHeld then
-                    VirtualUser:Button1Up(Vector2.new())
-                    isAuraClickHeld = false
-                end
                 if not isAutoFarming then lblPlayerStatus.Text = "Status: Idle" end
-            end
-        else
-            -- Release click if feature is turned off
-            if isAuraClickHeld then
-                VirtualUser:Button1Up(Vector2.new())
-                isAuraClickHeld = false
             end
         end
     end
@@ -1357,7 +1377,11 @@ local function terminateScript()
     releaseKey(Enum.KeyCode.A)
     releaseKey(Enum.KeyCode.S)
     releaseKey(Enum.KeyCode.D)
-    VirtualUser:Button1Up(Vector2.new()) -- Make sure click isn't stuck held down
+    
+    local centerPos = getScreenCenter()
+    VirtualUser:Button1Up(centerPos)
+    VirtualInputManager:SendMouseButtonEvent(centerPos.X, centerPos.Y, 0, false, game, 1)
+    
     screenGui:Destroy()
     print("Script Terminated.")
 end
