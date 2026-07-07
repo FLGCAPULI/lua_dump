@@ -109,10 +109,11 @@ local function createTabBtn(text, pos, widthStr)
     return btn
 end
 
--- Tabs
-local btnTabMain = createTabBtn("Main", UDim2.new(0, 0, 0, 0), 0.334)
-local btnTabMods = createTabBtn("Mods", UDim2.new(0.334, 0, 0, 0), 0.333)
-local btnTabMisc = createTabBtn("Misc", UDim2.new(0.667, 0, 0, 0), 0.333)
+-- Tabs (Now 4 sections)
+local btnTabMain = createTabBtn("Vehicle", UDim2.new(0, 0, 0, 0), 0.25)
+local btnTabPlayer = createTabBtn("Player", UDim2.new(0.25, 0, 0, 0), 0.25)
+local btnTabMods = createTabBtn("Mods", UDim2.new(0.5, 0, 0, 0), 0.25)
+local btnTabMisc = createTabBtn("Misc", UDim2.new(0.75, 0, 0, 0), 0.25)
 btnTabMain.BackgroundColor3 = Theme.Active -- Default active
 
 -- Content Container with Scroll
@@ -132,6 +133,11 @@ scrolling.ScrollBarThickness = 6
 local tabMain = Instance.new("Frame", scrolling)
 tabMain.Size = UDim2.new(1, 0, 1, 0)
 tabMain.BackgroundTransparency = 1
+
+local tabPlayer = Instance.new("Frame", scrolling)
+tabPlayer.Size = UDim2.new(1, 0, 1, 0)
+tabPlayer.BackgroundTransparency = 1
+tabPlayer.Visible = false
 
 local tabMods = Instance.new("Frame", scrolling)
 tabMods.Size = UDim2.new(1, 0, 1, 0)
@@ -223,6 +229,42 @@ local btnStart = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 16
 local btnPause = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 200), "Pause")
 local btnForceUnload = createUIElement("TextButton", tabMain, UDim2.new(0.05, 0, 0, 235), "Force Unload")
 
+-- === PLAYER (ORE FARM) TAB ELEMENTS ===
+local lblMaxOre = Instance.new("TextLabel", tabPlayer)
+lblMaxOre.Size = UDim2.new(0.9, 0, 0, 20)
+lblMaxOre.Position = UDim2.new(0.05, 0, 0, 5)
+lblMaxOre.Text = "Max Ores Before Unload:"
+lblMaxOre.TextColor3 = Theme.Text
+lblMaxOre.Font = Enum.Font.Code
+lblMaxOre.BackgroundTransparency = 1
+lblMaxOre.TextXAlignment = Enum.TextXAlignment.Left
+
+local txtMaxOre = createUIElement("TextBox", tabPlayer, UDim2.new(0.05, 0, 0, 25), "50")
+txtMaxOre.PlaceholderText = "50"
+txtMaxOre.ClearTextOnFocus = false
+
+local lblPlayerStatus = Instance.new("TextLabel", tabPlayer)
+lblPlayerStatus.Size = UDim2.new(0.9, 0, 0, 20)
+lblPlayerStatus.Position = UDim2.new(0.05, 0, 0, 65)
+lblPlayerStatus.Text = "Status: Idle"
+lblPlayerStatus.TextColor3 = Theme.Text
+lblPlayerStatus.Font = Enum.Font.Code
+lblPlayerStatus.BackgroundTransparency = 1
+lblPlayerStatus.TextSize = 12
+lblPlayerStatus.TextXAlignment = Enum.TextXAlignment.Left
+
+local lblPlayerCargo = Instance.new("TextLabel", tabPlayer)
+lblPlayerCargo.Size = UDim2.new(0.9, 0, 0, 20)
+lblPlayerCargo.Position = UDim2.new(0.05, 0, 0, 85)
+lblPlayerCargo.Text = "Backpack: 0 / 50"
+lblPlayerCargo.TextColor3 = Theme.Text
+lblPlayerCargo.Font = Enum.Font.Code
+lblPlayerCargo.BackgroundTransparency = 1
+lblPlayerCargo.TextSize = 12
+lblPlayerCargo.TextXAlignment = Enum.TextXAlignment.Left
+
+local btnStartPlayerFarm = createUIElement("TextButton", tabPlayer, UDim2.new(0.05, 0, 0, 115), "Start Ore Farm")
+
 -- === MODS TAB ELEMENTS ===
 local lblSpeed = Instance.new("TextLabel", tabMods)
 lblSpeed.Size = UDim2.new(0.9, 0, 0, 20)
@@ -294,16 +336,21 @@ local btnTerminate = createUIElement("TextButton", tabMisc, UDim2.new(0.05, 0, 0
 -- Tab Switching Logic
 local function switchTab(tabName)
     btnTabMain.BackgroundColor3 = Theme.TabBG
+    btnTabPlayer.BackgroundColor3 = Theme.TabBG
     btnTabMods.BackgroundColor3 = Theme.TabBG
     btnTabMisc.BackgroundColor3 = Theme.TabBG
     
     tabMain.Visible = false
+    tabPlayer.Visible = false
     tabMods.Visible = false
     tabMisc.Visible = false
     
-    if tabName == "Main" then
+    if tabName == "Vehicle" then
         btnTabMain.BackgroundColor3 = Theme.Active
         tabMain.Visible = true
+    elseif tabName == "Player" then
+        btnTabPlayer.BackgroundColor3 = Theme.Active
+        tabPlayer.Visible = true
     elseif tabName == "Mods" then
         btnTabMods.BackgroundColor3 = Theme.Active
         tabMods.Visible = true
@@ -313,7 +360,8 @@ local function switchTab(tabName)
     end
 end
 
-btnTabMain.MouseButton1Click:Connect(function() switchTab("Main") end)
+btnTabMain.MouseButton1Click:Connect(function() switchTab("Vehicle") end)
+btnTabPlayer.MouseButton1Click:Connect(function() switchTab("Player") end)
 btnTabMods.MouseButton1Click:Connect(function() switchTab("Mods") end)
 btnTabMisc.MouseButton1Click:Connect(function() switchTab("Misc") end)
 
@@ -588,6 +636,131 @@ local function getShortestAngle(target, current)
     -- Returns the shortest difference between two angles (-180 to 180)
     return (target - current + 180) % 360 - 180
 end
+
+-- ==========================================
+-- NEW: PLAYER ORE FARM LOGIC
+-- ==========================================
+local isOreFarming = false
+
+local function getOrePackCount()
+    local pFolder = workspace:FindFirstChild(player.Name)
+    if pFolder then
+        local orePack = pFolder:FindFirstChild("OrePackCargo")
+        if orePack then
+            return #orePack:GetChildren()
+        end
+    end
+    return 0
+end
+
+local function getNearestOre()
+    local placedOre = workspace:FindFirstChild("PlacedOre")
+    if not placedOre then return nil end
+    
+    local hrp = getHRP()
+    local myPos = hrp and hrp.Position or Vector3.zero
+    
+    local closest = nil
+    local minDist = math.huge
+    
+    for _, ore in ipairs(placedOre:GetChildren()) do
+        if ore:IsA("BasePart") or ore:IsA("Model") then
+            local pos = ore:IsA("Model") and ore:GetPivot().Position or ore.Position
+            local dist = (myPos - pos).Magnitude
+            if dist < minDist then
+                minDist = dist
+                closest = ore
+            end
+        end
+    end
+    
+    return closest
+end
+
+local function equipPickaxe()
+    local char = player.Character
+    if char and not char:FindFirstChildOfClass("Tool") then
+        pressKey(Enum.KeyCode.One, 0.1)
+    end
+end
+
+local function oreFarmLoop()
+    while isOreFarming do
+        local currentOres = getOrePackCount()
+        local maxOres = tonumber(txtMaxOre.Text) or 50
+        
+        lblPlayerCargo.Text = "Backpack: " .. currentOres .. " / " .. maxOres
+        
+        if currentOres >= maxOres then
+            -- Backpack Full -> Unload
+            lblPlayerStatus.Text = "Status: Unloading..."
+            getUnloaderCFrame()
+            
+            if wp1 then
+                -- Align with unloader and press E once
+                teleport(wp1)
+                task.wait(0.3)
+                pressKey(Enum.KeyCode.E, 0.1)
+                
+                -- Wait a moment to ensure ores are processed
+                task.wait(2) 
+            else
+                lblPlayerStatus.Text = "Status: Unloader Not Found!"
+                task.wait(1.5)
+            end
+        else
+            -- Search and mine ore
+            local targetOre = getNearestOre()
+            if targetOre then
+                lblPlayerStatus.Text = "Status: Mining Ore..."
+                
+                local orePos = targetOre:IsA("Model") and targetOre:GetPivot().Position or targetOre.Position
+                
+                -- Teleport to an open air spot near the ore to avoid clipping (4 studs up, 4 studs offset)
+                local offsetPos = orePos + Vector3.new(0, 4, 4)
+                
+                -- Look at the ore so clicking registers correctly
+                teleport(CFrame.lookAt(offsetPos, orePos))
+                
+                task.wait(0.15)
+                equipPickaxe()
+                
+                -- Force camera to look at the ore (helps auto-clickers hit target)
+                local cam = workspace.CurrentCamera
+                if cam then cam.CFrame = CFrame.lookAt(cam.CFrame.Position, orePos) end
+                
+                -- Simulate Pickaxe Mining
+                local tool = player.Character:FindFirstChildOfClass("Tool")
+                if tool then
+                    tool:Activate()
+                end
+                -- Fallback Click Simulation
+                VirtualUser:ClickButton1(Vector2.new())
+                
+                task.wait(0.25)
+            else
+                lblPlayerStatus.Text = "Status: Waiting for Ores..."
+                task.wait(1)
+            end
+        end
+        
+        task.wait(0.05)
+    end
+end
+
+btnStartPlayerFarm.MouseButton1Click:Connect(function()
+    isOreFarming = not isOreFarming
+    if isOreFarming then
+        btnStartPlayerFarm.Text = "Stop Ore Farm"
+        btnStartPlayerFarm.BackgroundColor3 = Color3.fromRGB(150, 100, 100)
+        lblPlayerStatus.Text = "Status: Starting..."
+        task.spawn(oreFarmLoop)
+    else
+        btnStartPlayerFarm.Text = "Start Ore Farm"
+        btnStartPlayerFarm.BackgroundColor3 = Theme.Button
+        lblPlayerStatus.Text = "Status: Idle"
+    end
+end)
 
 -- CAMERA ALIGNMENT SENSOR
 local function alignCameraWithVehicle()
@@ -1035,6 +1208,7 @@ end)
 local function terminateScript()
     isRunning = false
     isPaused = false
+    isOreFarming = false
     releaseKey(Enum.KeyCode.W)
     releaseKey(Enum.KeyCode.A)
     releaseKey(Enum.KeyCode.S)
