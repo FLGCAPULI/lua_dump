@@ -243,19 +243,10 @@ local txtMaxOre = createUIElement("TextBox", tabPlayer, UDim2.new(0.05, 0, 0, 25
 txtMaxOre.PlaceholderText = "50"
 txtMaxOre.ClearTextOnFocus = false
 
-local lblPlayerStatus = Instance.new("TextLabel", tabPlayer)
-lblPlayerStatus.Size = UDim2.new(0.9, 0, 0, 20)
-lblPlayerStatus.Position = UDim2.new(0.05, 0, 0, 65)
-lblPlayerStatus.Text = "Status: Idle"
-lblPlayerStatus.TextColor3 = Theme.Text
-lblPlayerStatus.Font = Enum.Font.Code
-lblPlayerStatus.BackgroundTransparency = 1
-lblPlayerStatus.TextSize = 12
-lblPlayerStatus.TextXAlignment = Enum.TextXAlignment.Left
-
+local btnToggleAutoUnload = createUIElement("TextButton", tabPlayer, UDim2.new(0.05, 0, 0, 60), "Auto Unload: OFF")
 local lblPlayerCargo = Instance.new("TextLabel", tabPlayer)
 lblPlayerCargo.Size = UDim2.new(0.9, 0, 0, 20)
-lblPlayerCargo.Position = UDim2.new(0.05, 0, 0, 85)
+lblPlayerCargo.Position = UDim2.new(0.05, 0, 0, 95)
 lblPlayerCargo.Text = "Backpack: 0 / 50"
 lblPlayerCargo.TextColor3 = Theme.Text
 lblPlayerCargo.Font = Enum.Font.Code
@@ -263,7 +254,32 @@ lblPlayerCargo.BackgroundTransparency = 1
 lblPlayerCargo.TextSize = 12
 lblPlayerCargo.TextXAlignment = Enum.TextXAlignment.Left
 
-local btnStartPlayerFarm = createUIElement("TextButton", tabPlayer, UDim2.new(0.05, 0, 0, 115), "Start Ore Farm")
+local btnToggleAutoFarm = createUIElement("TextButton", tabPlayer, UDim2.new(0.05, 0, 0, 125), "Auto TP Farm: OFF")
+
+local lblAuraRadius = Instance.new("TextLabel", tabPlayer)
+lblAuraRadius.Size = UDim2.new(0.9, 0, 0, 20)
+lblAuraRadius.Position = UDim2.new(0.05, 0, 0, 160)
+lblAuraRadius.Text = "Ore Aura Radius (Studs):"
+lblAuraRadius.TextColor3 = Theme.Text
+lblAuraRadius.Font = Enum.Font.Code
+lblAuraRadius.BackgroundTransparency = 1
+lblAuraRadius.TextXAlignment = Enum.TextXAlignment.Left
+
+local txtAuraRadius = createUIElement("TextBox", tabPlayer, UDim2.new(0.05, 0, 0, 180), "15")
+txtAuraRadius.PlaceholderText = "15"
+txtAuraRadius.ClearTextOnFocus = false
+
+local btnToggleOreAura = createUIElement("TextButton", tabPlayer, UDim2.new(0.05, 0, 0, 215), "Ore Aura: OFF")
+
+local lblPlayerStatus = Instance.new("TextLabel", tabPlayer)
+lblPlayerStatus.Size = UDim2.new(0.9, 0, 0, 20)
+lblPlayerStatus.Position = UDim2.new(0.05, 0, 0, 250)
+lblPlayerStatus.Text = "Status: Idle"
+lblPlayerStatus.TextColor3 = Theme.Text
+lblPlayerStatus.Font = Enum.Font.Code
+lblPlayerStatus.BackgroundTransparency = 1
+lblPlayerStatus.TextSize = 12
+lblPlayerStatus.TextXAlignment = Enum.TextXAlignment.Left
 
 -- === MODS TAB ELEMENTS ===
 local lblSpeed = Instance.new("TextLabel", tabMods)
@@ -640,20 +656,25 @@ end
 -- ==========================================
 -- NEW: PLAYER ORE FARM LOGIC
 -- ==========================================
-local isOreFarming = false
+local isAutoUnloading = false
+local isAutoFarming = false
+local isOreAura = false
 
 local function getOrePackCount()
     local pFolder = workspace:FindFirstChild(player.Name)
     if pFolder then
         local orePack = pFolder:FindFirstChild("OrePackCargo")
         if orePack then
-            return #orePack:GetChildren()
+            -- Subtract 1 for the permanent child, then divide by 2 since each ore adds 2 children (ore + weld)
+            local rawCount = #orePack:GetChildren()
+            local actualOres = math.floor(math.max(0, rawCount - 1) / 2)
+            return actualOres
         end
     end
     return 0
 end
 
-local function getNearestOre()
+local function getNearestOre(maxRadius)
     local placedOre = workspace:FindFirstChild("PlacedOre")
     if not placedOre then return nil end
     
@@ -661,13 +682,13 @@ local function getNearestOre()
     local myPos = hrp and hrp.Position or Vector3.zero
     
     local closest = nil
-    local minDist = math.huge
+    local minDist = maxRadius or math.huge
     
     for _, ore in ipairs(placedOre:GetChildren()) do
         if ore:IsA("BasePart") or ore:IsA("Model") then
             local pos = ore:IsA("Model") and ore:GetPivot().Position or ore.Position
             local dist = (myPos - pos).Magnitude
-            if dist < minDist then
+            if dist <= minDist then
                 minDist = dist
                 closest = ore
             end
@@ -684,57 +705,84 @@ local function equipPickaxe()
     end
 end
 
-local function oreFarmLoop()
-    while isOreFarming do
+-- SMART RAYCAST CLIPPING FIX
+local function getSafeOrePosition(orePos)
+    local hrp = getHRP()
+    if not hrp then return orePos + Vector3.new(0, 4, 4) end
+    local myPos = hrp.Position
+    
+    local direction = (orePos - myPos).Unit
+    local distance = (orePos - myPos).Magnitude
+    
+    local raycastParams = RaycastParams.new()
+    local placedOre = workspace:FindFirstChild("PlacedOre")
+    raycastParams.FilterDescendantsInstances = {player.Character, placedOre}
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local rayResult = workspace:Raycast(myPos, direction * distance, raycastParams)
+    
+    if rayResult then
+        -- Stand 4 studs away from the cave wall surface (using normal) to prevent rubberbanding
+        return rayResult.Position + (rayResult.Normal * 4) + Vector3.new(0, 1, 0)
+    else
+        -- Line of sight clear, step back normally
+        return orePos - (direction * 3) + Vector3.new(0, 1, 0)
+    end
+end
+
+-- 1. AUTO UNLOAD LOOP
+task.spawn(function()
+    while task.wait(0.5) do
         local currentOres = getOrePackCount()
         local maxOres = tonumber(txtMaxOre.Text) or 50
-        
         lblPlayerCargo.Text = "Backpack: " .. currentOres .. " / " .. maxOres
         
-        if currentOres >= maxOres then
-            -- Backpack Full -> Unload
-            lblPlayerStatus.Text = "Status: Unloading..."
-            getUnloaderCFrame()
+        if isAutoUnloading and currentOres >= maxOres then
+            lblPlayerStatus.Text = "Status: Unloading Backpack..."
+            local hrp = getHRP()
+            local returnPos = hrp and hrp.CFrame
             
+            getUnloaderCFrame()
             if wp1 then
-                -- Align with unloader and press E once
                 teleport(wp1)
                 task.wait(0.3)
                 pressKey(Enum.KeyCode.E, 0.1)
+                task.wait(2) -- Wait for ores to process
                 
-                -- Wait a moment to ensure ores are processed
-                task.wait(2) 
+                if returnPos then teleport(returnPos) end
             else
                 lblPlayerStatus.Text = "Status: Unloader Not Found!"
                 task.wait(1.5)
             end
-        else
-            -- Search and mine ore
-            local targetOre = getNearestOre()
+        end
+    end
+end)
+
+-- 2. AUTO TP FARM LOOP
+task.spawn(function()
+    while task.wait(0.1) do
+        if isAutoFarming then
+            -- Pause if we are currently unloading
+            if isAutoUnloading and getOrePackCount() >= (tonumber(txtMaxOre.Text) or 50) then
+                task.wait(1)
+                continue
+            end
+            
+            local targetOre = getNearestOre(math.huge)
             if targetOre then
-                lblPlayerStatus.Text = "Status: Mining Ore..."
-                
+                lblPlayerStatus.Text = "Status: TP Farming..."
                 local orePos = targetOre:IsA("Model") and targetOre:GetPivot().Position or targetOre.Position
+                local safePos = getSafeOrePosition(orePos)
                 
-                -- Teleport to an open air spot near the ore to avoid clipping (4 studs up, 4 studs offset)
-                local offsetPos = orePos + Vector3.new(0, 4, 4)
-                
-                -- Look at the ore so clicking registers correctly
-                teleport(CFrame.lookAt(offsetPos, orePos))
-                
+                teleport(CFrame.lookAt(safePos, orePos))
                 task.wait(0.15)
-                equipPickaxe()
                 
-                -- Force camera to look at the ore (helps auto-clickers hit target)
+                equipPickaxe()
                 local cam = workspace.CurrentCamera
                 if cam then cam.CFrame = CFrame.lookAt(cam.CFrame.Position, orePos) end
                 
-                -- Simulate Pickaxe Mining
                 local tool = player.Character:FindFirstChildOfClass("Tool")
-                if tool then
-                    tool:Activate()
-                end
-                -- Fallback Click Simulation
+                if tool then tool:Activate() end
                 VirtualUser:ClickButton1(Vector2.new())
                 
                 task.wait(0.25)
@@ -743,24 +791,72 @@ local function oreFarmLoop()
                 task.wait(1)
             end
         end
-        
-        task.wait(0.05)
     end
-end
+end)
 
-btnStartPlayerFarm.MouseButton1Click:Connect(function()
-    isOreFarming = not isOreFarming
-    if isOreFarming then
-        btnStartPlayerFarm.Text = "Stop Ore Farm"
-        btnStartPlayerFarm.BackgroundColor3 = Color3.fromRGB(150, 100, 100)
-        lblPlayerStatus.Text = "Status: Starting..."
-        task.spawn(oreFarmLoop)
+-- 3. ORE AURA LOOP
+task.spawn(function()
+    while task.wait(0.1) do
+        if isOreAura then
+            local radius = tonumber(txtAuraRadius.Text) or 15
+            local targetOre = getNearestOre(radius)
+            
+            if targetOre then
+                if not isAutoFarming then lblPlayerStatus.Text = "Status: Aura Mining..." end
+                equipPickaxe()
+                
+                local orePos = targetOre:IsA("Model") and targetOre:GetPivot().Position or targetOre.Position
+                local hrp = getHRP()
+                
+                -- Turn character slightly to face ore (no camera snap) so the click registers
+                if hrp then hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(orePos.X, hrp.Position.Y, orePos.Z)) end
+                
+                local tool = player.Character:FindFirstChildOfClass("Tool")
+                if tool then tool:Activate() end
+                VirtualUser:ClickButton1(Vector2.new())
+            else
+                if not isAutoFarming then lblPlayerStatus.Text = "Status: Idle" end
+            end
+        end
+    end
+end)
+
+-- BUTTON TOGGLES
+btnToggleAutoUnload.MouseButton1Click:Connect(function()
+    isAutoUnloading = not isAutoUnloading
+    if isAutoUnloading then
+        btnToggleAutoUnload.Text = "Auto Unload: ON"
+        btnToggleAutoUnload.BackgroundColor3 = Color3.fromRGB(100, 150, 100)
     else
-        btnStartPlayerFarm.Text = "Start Ore Farm"
-        btnStartPlayerFarm.BackgroundColor3 = Theme.Button
+        btnToggleAutoUnload.Text = "Auto Unload: OFF"
+        btnToggleAutoUnload.BackgroundColor3 = Theme.Button
+    end
+end)
+
+btnToggleAutoFarm.MouseButton1Click:Connect(function()
+    isAutoFarming = not isAutoFarming
+    if isAutoFarming then
+        btnToggleAutoFarm.Text = "Auto TP Farm: ON"
+        btnToggleAutoFarm.BackgroundColor3 = Color3.fromRGB(150, 100, 100)
+    else
+        btnToggleAutoFarm.Text = "Auto TP Farm: OFF"
+        btnToggleAutoFarm.BackgroundColor3 = Theme.Button
         lblPlayerStatus.Text = "Status: Idle"
     end
 end)
+
+btnToggleOreAura.MouseButton1Click:Connect(function()
+    isOreAura = not isOreAura
+    if isOreAura then
+        btnToggleOreAura.Text = "Ore Aura: ON"
+        btnToggleOreAura.BackgroundColor3 = Color3.fromRGB(150, 150, 100)
+    else
+        btnToggleOreAura.Text = "Ore Aura: OFF"
+        btnToggleOreAura.BackgroundColor3 = Theme.Button
+        if not isAutoFarming then lblPlayerStatus.Text = "Status: Idle" end
+    end
+end)
+
 
 -- CAMERA ALIGNMENT SENSOR
 local function alignCameraWithVehicle()
@@ -1208,7 +1304,9 @@ end)
 local function terminateScript()
     isRunning = false
     isPaused = false
-    isOreFarming = false
+    isAutoUnloading = false
+    isAutoFarming = false
+    isOreAura = false
     releaseKey(Enum.KeyCode.W)
     releaseKey(Enum.KeyCode.A)
     releaseKey(Enum.KeyCode.S)
