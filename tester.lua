@@ -716,11 +716,45 @@ local function getNearestOre(maxRadius)
     return closest
 end
 
--- SIMPLIFIED ORE POSITION (USING FLY/NOCLIP)
+-- SMART OUTWARD RAYCAST CLIPPING SOLVER
 local function getSafeOrePosition(orePos)
-    -- Since we now have Fly & Noclip, we can bypass complex raycasting 
-    -- and teleport directly above the ore so we are always in reach!
-    return orePos + Vector3.new(0, 3.5, 0)
+    local placedOre = workspace:FindFirstChild("PlacedOre")
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {player.Character, placedOre}
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+
+    -- Check multiple directions from the ore outward to find an open spot
+    local testOffsets = {
+        Vector3.new(0, 4.5, 0),      -- Directly Above (Preferred)
+        Vector3.new(4, 2, 0),        -- Right & slightly up
+        Vector3.new(-4, 2, 0),       -- Left & slightly up
+        Vector3.new(0, 2, 4),        -- Back & slightly up
+        Vector3.new(0, 2, -4),       -- Forward & slightly up
+        Vector3.new(0, 0, 4),        -- Directly Back
+        Vector3.new(0, 0, -4)        -- Directly Forward
+    }
+
+    local bestPos = orePos + Vector3.new(0, 3.5, 0)
+    local maxDist = -1
+
+    for _, offset in ipairs(testOffsets) do
+        local result = workspace:Raycast(orePos, offset, raycastParams)
+        
+        if not result then
+            -- Completely clear path found! This is a perfect safe spot.
+            return orePos + offset
+        else
+            -- Keep track of the direction with the most physical space
+            if result.Distance > maxDist then
+                maxDist = result.Distance
+                -- Back up slightly from the hit wall (1.5 studs) to fit the player's body safely
+                bestPos = orePos + (offset.Unit * math.max(0, result.Distance - 1.5))
+            end
+        end
+    end
+
+    -- Return the safest fallback spot if it's a very tight tunnel
+    return bestPos
 end
 
 -- HELPER FOR SCREEN CENTER CLICKING
