@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local VirtualUser = game:GetService("VirtualUser")
+local RunService = game:GetService("RunService")
 
 -- Wait securely for the player to exist
 local player = Players.LocalPlayer
@@ -510,6 +511,15 @@ local function teleport(cframe)
     end
 end
 
+-- HELPER TO MAKE CAMERA LOOK STRAIGHT DOWN FOR UNLOADING
+local function lookDown()
+    local cam = workspace.CurrentCamera
+    if cam then
+        -- 0.01 offset prevents math/gimbal lock errors when looking perfectly straight down
+        cam.CFrame = CFrame.lookAt(cam.CFrame.Position, cam.CFrame.Position + Vector3.new(0.01, -0.99, 0))
+    end
+end
+
 local function safeWait(waitTime)
     local elapsed = 0
     while elapsed < waitTime do
@@ -698,29 +708,11 @@ local function getNearestOre(maxRadius)
     return closest
 end
 
--- SMART RAYCAST CLIPPING FIX
+-- SIMPLIFIED ORE POSITION (USING FLY/NOCLIP)
 local function getSafeOrePosition(orePos)
-    local hrp = getHRP()
-    if not hrp then return orePos + Vector3.new(0, 4, 4) end
-    local myPos = hrp.Position
-    
-    local direction = (orePos - myPos).Unit
-    local distance = (orePos - myPos).Magnitude
-    
-    local raycastParams = RaycastParams.new()
-    local placedOre = workspace:FindFirstChild("PlacedOre")
-    raycastParams.FilterDescendantsInstances = {player.Character, placedOre}
-    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-    
-    local rayResult = workspace:Raycast(myPos, direction * distance, raycastParams)
-    
-    if rayResult then
-        -- Stand 4 studs away from the cave wall surface (using normal) to prevent rubberbanding
-        return rayResult.Position + (rayResult.Normal * 4) + Vector3.new(0, 1, 0)
-    else
-        -- Line of sight clear, step back normally
-        return orePos - (direction * 3) + Vector3.new(0, 1, 0)
-    end
+    -- Since we now have Fly & Noclip, we can bypass complex raycasting 
+    -- and teleport directly above the ore so we are always in reach!
+    return orePos + Vector3.new(0, 3.5, 0)
 end
 
 -- HELPER FOR SCREEN CENTER CLICKING
@@ -748,6 +740,7 @@ task.spawn(function()
             if wp1 then
                 teleport(wp1)
                 task.wait(0.3)
+                lookDown()
                 pressKey(Enum.KeyCode.E, 0.1)
                 task.wait(2) -- Wait for ores to process
                 
@@ -760,10 +753,31 @@ task.spawn(function()
     end
 end)
 
+-- FLY/NOCLIP RENDER CONNECTION
+RunService.Stepped:Connect(function()
+    if isAutoFarming and player.Character then
+        for _, part in ipairs(player.Character:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                part.CanCollide = false
+            end
+        end
+    end
+end)
+
 -- 2. AUTO TP FARM LOOP
 task.spawn(function()
     while task.wait(0.1) do
         if isAutoFarming then
+            -- Ensure Fly is active
+            local hrp = getHRP()
+            if hrp and not hrp:FindFirstChild("AutoFarmFly") then
+                local bv = Instance.new("BodyVelocity")
+                bv.Name = "AutoFarmFly"
+                bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+                bv.Velocity = Vector3.zero
+                bv.Parent = hrp
+            end
+
             -- Pause if we are currently unloading
             if isAutoUnloading and getOrePackCount() >= (tonumber(txtMaxOre.Text) or 50) then
                 VirtualUser:Button1Up(getScreenCenter())
@@ -882,6 +896,13 @@ btnToggleAutoFarm.MouseButton1Click:Connect(function()
         btnToggleAutoFarm.Text = "Auto TP Farm: OFF"
         btnToggleAutoFarm.BackgroundColor3 = Theme.Button
         lblPlayerStatus.Text = "Status: Idle"
+        
+        -- Disable Fly
+        local hrp = getHRP()
+        if hrp then
+            local bv = hrp:FindFirstChild("AutoFarmFly")
+            if bv then bv:Destroy() end
+        end
     end
 end)
 
@@ -937,12 +958,14 @@ local function unloadFunc()
     for i = 1, 4 do
         teleport(wp1)
         safeWait(0.18)
+        lookDown()
         pressKey(Enum.KeyCode.E, 0.1)
         safeWait(0.28)
         
         teleport(wp2)
         safeWait(0.18)
         if i < 4 then
+            lookDown()
             pressKey(Enum.KeyCode.E, 0.1)
             safeWait(0.28)
         end
@@ -1355,6 +1378,13 @@ local function terminateScript()
     local centerPos = getScreenCenter()
     VirtualUser:Button1Up(centerPos)
     VirtualInputManager:SendMouseButtonEvent(centerPos.X, centerPos.Y, 0, false, game, 1)
+    
+    -- Cleanup Fly
+    local hrp = getHRP()
+    if hrp then
+        local bv = hrp:FindFirstChild("AutoFarmFly")
+        if bv then bv:Destroy() end
+    end
     
     screenGui:Destroy()
     print("Script Terminated.")
