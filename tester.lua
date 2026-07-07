@@ -700,9 +700,26 @@ end
 
 local function equipPickaxe()
     local char = player.Character
-    if char and not char:FindFirstChildOfClass("Tool") then
-        pressKey(Enum.KeyCode.One, 0.1)
+    if not char then return end
+    
+    -- If already equipped, do nothing
+    if char:FindFirstChildOfClass("Tool") then return end
+    
+    -- Try to equip through Humanoid (Much more reliable and prevents flickering!)
+    local backpack = player:FindFirstChildOfClass("Backpack")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    
+    if backpack and hum then
+        local tool = backpack:FindFirstChildOfClass("Tool")
+        if tool then
+            hum:EquipTool(tool)
+            return
+        end
     end
+    
+    -- Fallback if EquipTool fails
+    pressKey(Enum.KeyCode.One, 0.1)
+    task.wait(0.5) -- Wait a bit so we don't spam the key and unequip it
 end
 
 -- SMART RAYCAST CLIPPING FIX
@@ -759,11 +776,16 @@ task.spawn(function()
 end)
 
 -- 2. AUTO TP FARM LOOP
+local isFarmClickHeld = false
 task.spawn(function()
     while task.wait(0.1) do
         if isAutoFarming then
             -- Pause if we are currently unloading
             if isAutoUnloading and getOrePackCount() >= (tonumber(txtMaxOre.Text) or 50) then
+                if isFarmClickHeld then
+                    VirtualUser:Button1Up(Vector2.new())
+                    isFarmClickHeld = false
+                end
                 task.wait(1)
                 continue
             end
@@ -775,26 +797,37 @@ task.spawn(function()
                 local safePos = getSafeOrePosition(orePos)
                 
                 teleport(CFrame.lookAt(safePos, orePos))
-                task.wait(0.15)
                 
                 equipPickaxe()
                 local cam = workspace.CurrentCamera
                 if cam then cam.CFrame = CFrame.lookAt(cam.CFrame.Position, orePos) end
                 
-                local tool = player.Character:FindFirstChildOfClass("Tool")
-                if tool then tool:Activate() end
-                VirtualUser:ClickButton1(Vector2.new())
-                
-                task.wait(0.25)
+                -- Hold the click down instead of clicking repeatedly
+                if not isFarmClickHeld then
+                    VirtualUser:Button1Down(Vector2.new())
+                    isFarmClickHeld = true
+                end
             else
+                -- Release click when there are no ores nearby
+                if isFarmClickHeld then
+                    VirtualUser:Button1Up(Vector2.new())
+                    isFarmClickHeld = false
+                end
                 lblPlayerStatus.Text = "Status: Waiting for Ores..."
                 task.wait(1)
+            end
+        else
+            -- Release click if feature is turned off
+            if isFarmClickHeld then
+                VirtualUser:Button1Up(Vector2.new())
+                isFarmClickHeld = false
             end
         end
     end
 end)
 
 -- 3. ORE AURA LOOP
+local isAuraClickHeld = false
 task.spawn(function()
     while task.wait(0.1) do
         if isOreAura then
@@ -811,11 +844,24 @@ task.spawn(function()
                 -- Turn character slightly to face ore (no camera snap) so the click registers
                 if hrp then hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(orePos.X, hrp.Position.Y, orePos.Z)) end
                 
-                local tool = player.Character:FindFirstChildOfClass("Tool")
-                if tool then tool:Activate() end
-                VirtualUser:ClickButton1(Vector2.new())
+                -- Hold the click down instead of clicking repeatedly
+                if not isAuraClickHeld then
+                    VirtualUser:Button1Down(Vector2.new())
+                    isAuraClickHeld = true
+                end
             else
+                -- Release click when there are no ores nearby
+                if isAuraClickHeld then
+                    VirtualUser:Button1Up(Vector2.new())
+                    isAuraClickHeld = false
+                end
                 if not isAutoFarming then lblPlayerStatus.Text = "Status: Idle" end
+            end
+        else
+            -- Release click if feature is turned off
+            if isAuraClickHeld then
+                VirtualUser:Button1Up(Vector2.new())
+                isAuraClickHeld = false
             end
         end
     end
@@ -1311,6 +1357,7 @@ local function terminateScript()
     releaseKey(Enum.KeyCode.A)
     releaseKey(Enum.KeyCode.S)
     releaseKey(Enum.KeyCode.D)
+    VirtualUser:Button1Up(Vector2.new()) -- Make sure click isn't stuck held down
     screenGui:Destroy()
     print("Script Terminated.")
 end
