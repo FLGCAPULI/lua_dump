@@ -669,6 +669,7 @@ end
 local isAutoUnloading = false
 local isAutoFarming = false
 local isOreAura = false
+local ignoredOres = {} -- NEW: Blacklist for unreachable ores
 
 local function getOrePackCount()
     local pFolder = workspace:FindFirstChild(player.Name)
@@ -695,7 +696,8 @@ local function getNearestOre(maxRadius)
     local minDist = maxRadius or math.huge
     
     for _, ore in ipairs(placedOre:GetChildren()) do
-        if ore:IsA("BasePart") or ore:IsA("Model") then
+        -- Skip ores that are in the ignored blacklist
+        if not ignoredOres[ore] and (ore:IsA("BasePart") or ore:IsA("Model")) then
             local pos = ore:IsA("Model") and ore:GetPivot().Position or ore.Position
             local dist = (myPos - pos).Magnitude
             if dist <= minDist then
@@ -703,6 +705,12 @@ local function getNearestOre(maxRadius)
                 closest = ore
             end
         end
+    end
+    
+    -- If we ignored everything, clear the list and try again
+    if not closest and next(ignoredOres) then
+        ignoredOres = {}
+        return getNearestOre(maxRadius)
     end
     
     return closest
@@ -795,6 +803,17 @@ task.spawn(function()
                 
                 teleport(CFrame.lookAt(safePos, orePos))
                 
+                -- Wait a moment to check for rubberbanding
+                task.wait(0.25)
+                
+                if hrp and (hrp.Position - orePos).Magnitude > 15 then
+                    -- We got rubberbanded! The ore is likely inside a low ceiling/wall.
+                    ignoredOres[targetOre] = true
+                    lblPlayerStatus.Text = "Status: Skipping unreachable ore..."
+                    task.wait(0.5)
+                    continue
+                end
+                
                 local cam = workspace.CurrentCamera
                 local centerPos = getScreenCenter()
                 
@@ -806,6 +825,12 @@ task.spawn(function()
                 while isAutoFarming and targetOre and targetOre.Parent == placedOre do
                     if isAutoUnloading and getOrePackCount() >= (tonumber(txtMaxOre.Text) or 50) then
                         break -- Interrupt to go unload
+                    end
+                    
+                    -- Second distance check in case we rubberband mid-mining
+                    if hrp and (hrp.Position - orePos).Magnitude > 15 then
+                        ignoredOres[targetOre] = true
+                        break
                     end
                     
                     -- Keep camera locked onto it so the center of the screen hits the ore
