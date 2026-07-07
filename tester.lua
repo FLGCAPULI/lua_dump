@@ -698,30 +698,6 @@ local function getNearestOre(maxRadius)
     return closest
 end
 
-local function equipPickaxe()
-    local char = player.Character
-    if not char then return end
-    
-    -- If already equipped, do nothing
-    if char:FindFirstChildOfClass("Tool") then return end
-    
-    -- Try to equip through Humanoid (Much more reliable and prevents flickering!)
-    local backpack = player:FindFirstChildOfClass("Backpack")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    
-    if backpack and hum then
-        local tool = backpack:FindFirstChildOfClass("Tool")
-        if tool then
-            hum:EquipTool(tool)
-            return
-        end
-    end
-    
-    -- Fallback if EquipTool fails
-    pressKey(Enum.KeyCode.One, 0.1)
-    task.wait(0.5) -- Wait a bit so we don't spam the key and unequip it
-end
-
 -- SMART RAYCAST CLIPPING FIX
 local function getSafeOrePosition(orePos)
     local hrp = getHRP()
@@ -804,7 +780,6 @@ task.spawn(function()
                 local safePos = getSafeOrePosition(orePos)
                 
                 teleport(CFrame.lookAt(safePos, orePos))
-                equipPickaxe()
                 
                 local cam = workspace.CurrentCamera
                 local centerPos = getScreenCenter()
@@ -850,7 +825,6 @@ task.spawn(function()
             
             if targetOre and placedOre then
                 if not isAutoFarming then lblPlayerStatus.Text = "Status: Aura Mining..." end
-                equipPickaxe()
                 
                 local centerPos = getScreenCenter()
                 
