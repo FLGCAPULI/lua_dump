@@ -1,171 +1,182 @@
-local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
+-- =========================================================================
+-- Waypoint Tween Pathing GUI
+-- =========================================================================
 
-local player = Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
 local waypoints = {}
 local isRunning = false
-local currentTween = nil
 
-local TWEEN_SPEED = 100 -- Studs per second
-local WAIT_TIME = 3 -- Seconds to sleep at each waypoint
-
--- ==========================================
--- 1. GUI CREATION
--- ==========================================
+-- =========================================================================
+-- GUI CREATION
+-- =========================================================================
 local ScreenGui = Instance.new("ScreenGui")
-local MainFrame = Instance.new("Frame")
-local Title = Instance.new("TextLabel")
-local AddWpBtn = Instance.new("TextButton")
-local StartBtn = Instance.new("TextButton")
-local StopBtn = Instance.new("TextButton")
-local ClearBtn = Instance.new("TextButton")
-local StatusLabel = Instance.new("TextLabel")
-
--- Try to parent to CoreGui for executors, fallback to PlayerGui for Studio
-local success, _ = pcall(function()
-	ScreenGui.Parent = game:GetService("CoreGui")
-end)
-if not success then
-	ScreenGui.Parent = player:WaitForChild("PlayerGui")
-end
-
-ScreenGui.Name = "WaypointGUI"
+ScreenGui.Name = "WaypointFarmerGUI"
 ScreenGui.ResetOnSpawn = false
 
-MainFrame.Name = "MainFrame"
-MainFrame.Parent = ScreenGui
-MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-MainFrame.Position = UDim2.new(0.5, -100, 0.5, -125)
-MainFrame.Size = UDim2.new(0, 200, 0, 250)
+-- Safely mount GUI (supports both Studio and Executors)
+local success, coreGui = pcall(function() return game:GetService("CoreGui") end)
+ScreenGui.Parent = (success and coreGui) and coreGui or LocalPlayer:WaitForChild("PlayerGui")
+
+local MainFrame = Instance.new("Frame", ScreenGui)
+MainFrame.Size = UDim2.new(0, 250, 0, 310)
+MainFrame.Position = UDim2.new(0.5, -125, 0.5, -155)
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
-MainFrame.Draggable = true -- Allows the user to drag the UI around
+MainFrame.Draggable = true -- Allows you to drag the menu around
 
-Title.Name = "Title"
-Title.Parent = MainFrame
-Title.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-Title.Size = UDim2.new(1, 0, 0, 30)
-Title.Font = Enum.Font.GothamBold
-Title.Text = "Waypoint Looper"
+local UIListLayout = Instance.new("UIListLayout", MainFrame)
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.Padding = UDim.new(0, 10)
+UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+local UIPadding = Instance.new("UIPadding", MainFrame)
+UIPadding.PaddingTop = UDim.new(0, 10)
+
+-- Title
+local Title = Instance.new("TextLabel", MainFrame)
+Title.Size = UDim2.new(1, -20, 0, 30)
+Title.BackgroundTransparency = 1
+Title.Text = "Waypoint Controller"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextSize = 14
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 16
 
-StatusLabel.Name = "StatusLabel"
-StatusLabel.Parent = MainFrame
+-- Tween Speed Input
+local SpeedInput = Instance.new("TextBox", MainFrame)
+SpeedInput.Size = UDim2.new(1, -20, 0, 30)
+SpeedInput.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+SpeedInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+SpeedInput.Font = Enum.Font.Gotham
+SpeedInput.PlaceholderText = "Speed (Studs/Sec) [Default: 50]"
+SpeedInput.Text = "50"
+SpeedInput.TextSize = 14
+
+-- Sleep Input
+local SleepInput = Instance.new("TextBox", MainFrame)
+SleepInput.Size = UDim2.new(1, -20, 0, 30)
+SleepInput.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+SleepInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+SleepInput.Font = Enum.Font.Gotham
+SleepInput.PlaceholderText = "Sleep (Seconds) [Default: 1]"
+SleepInput.Text = "1"
+SleepInput.TextSize = 14
+
+-- Add WP Button
+local AddWPBtn = Instance.new("TextButton", MainFrame)
+AddWPBtn.Size = UDim2.new(1, -20, 0, 35)
+AddWPBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 60)
+AddWPBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+AddWPBtn.Font = Enum.Font.GothamBold
+AddWPBtn.Text = "Add Waypoint Here"
+AddWPBtn.TextSize = 14
+
+-- Clear WP Button
+local ClearWPBtn = Instance.new("TextButton", MainFrame)
+ClearWPBtn.Size = UDim2.new(1, -20, 0, 35)
+ClearWPBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+ClearWPBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ClearWPBtn.Font = Enum.Font.GothamBold
+ClearWPBtn.Text = "Clear All Waypoints"
+ClearWPBtn.TextSize = 14
+
+-- Status Label
+local StatusLabel = Instance.new("TextLabel", MainFrame)
+StatusLabel.Size = UDim2.new(1, -20, 0, 20)
 StatusLabel.BackgroundTransparency = 1
-StatusLabel.Position = UDim2.new(0, 0, 0, 35)
-StatusLabel.Size = UDim2.new(1, 0, 0, 20)
+StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
 StatusLabel.Font = Enum.Font.Gotham
 StatusLabel.Text = "Waypoints: 0"
-StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-StatusLabel.TextSize = 14
+StatusLabel.TextSize = 12
 
-local function createButton(name, text, posY)
-	local btn = Instance.new("TextButton")
-	btn.Name = name
-	btn.Parent = MainFrame
-	btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-	btn.Position = UDim2.new(0.1, 0, 0, posY)
-	btn.Size = UDim2.new(0.8, 0, 0, 35)
-	btn.Font = Enum.Font.GothamBold
-	btn.Text = text
-	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	btn.TextSize = 14
-	return btn
-end
+-- Start/Stop Button
+local ToggleBtn = Instance.new("TextButton", MainFrame)
+ToggleBtn.Size = UDim2.new(1, -20, 0, 45)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 210)
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.Font = Enum.Font.GothamBlack
+ToggleBtn.Text = "START"
+ToggleBtn.TextSize = 18
 
-AddWpBtn = createButton("AddWpBtn", "Add WP (Current Pos)", 60)
-StartBtn = createButton("StartBtn", "Start Loop", 105)
-StopBtn = createButton("StopBtn", "Stop Loop", 150)
-ClearBtn = createButton("ClearBtn", "Clear Waypoints", 195)
+-- =========================================================================
+-- LOGIC & FUNCTIONS
+-- =========================================================================
 
--- ==========================================
--- 2. LOGIC & FUNCTIONS
--- ==========================================
-
--- Function to safely Tween the character
+-- Function to handle the actual tweening
 local function tweenTo(targetCFrame)
-	local character = player.Character
-	if not character or not character:FindFirstChild("HumanoidRootPart") then return end
-	
-	local hrp = character.HumanoidRootPart
-	
-	-- Calculate time based on distance so the speed remains consistent
-	local distance = (hrp.Position - targetCFrame.Position).Magnitude
-	local tweenTime = distance / TWEEN_SPEED
-	
-	local tweenInfo = TweenInfo.new(tweenTime, Enum.EasingStyle.Linear)
-	currentTween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
-	
-	-- Anchor the root part so gravity doesn't mess up the tween
-	hrp.Anchored = true
-	currentTween:Play()
-	currentTween.Completed:Wait()
-	hrp.Anchored = false
+    local char = LocalPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    
+    local hrp = char.HumanoidRootPart
+    local speed = tonumber(SpeedInput.Text) or 50
+    
+    -- Calculate distance to make speed consistent regardless of how far the WP is
+    local distance = (hrp.Position - targetCFrame.Position).Magnitude
+    local duration = distance / speed
+    
+    local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
+    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
+    
+    -- Optional: If you find yourself falling through the map while tweening, 
+    -- uncomment the two lines below to freeze physics during the move.
+    -- hrp.Anchored = true 
+    tween:Play()
+    tween.Completed:Wait()
+    -- hrp.Anchored = false
 end
 
--- Add Waypoint Button
-AddWpBtn.MouseButton1Click:Connect(function()
-	local character = player.Character
-	if character and character:FindFirstChild("HumanoidRootPart") then
-		table.insert(waypoints, character.HumanoidRootPart.CFrame)
-		StatusLabel.Text = "Waypoints: " .. #waypoints
-	end
+-- Add Waypoint Event
+AddWPBtn.MouseButton1Click:Connect(function()
+    local char = LocalPlayer.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        table.insert(waypoints, char.HumanoidRootPart.CFrame)
+        StatusLabel.Text = "Waypoints: " .. #waypoints
+    end
 end)
 
--- Start Loop Button
-StartBtn.MouseButton1Click:Connect(function()
-	if isRunning then return end
-	if #waypoints == 0 then 
-		StatusLabel.Text = "Add a WP first!"
-		task.wait(2)
-		StatusLabel.Text = "Waypoints: " .. #waypoints
-		return 
-	end
-	
-	isRunning = true
-	StatusLabel.Text = "Status: RUNNING"
-	StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-	
-	task.spawn(function()
-		while isRunning do
-			for i, wpCFrame in ipairs(waypoints) do
-				if not isRunning then break end
-				
-				-- 1. Tween to Waypoint
-				tweenTo(wpCFrame)
-				
-				if not isRunning then break end
-				
-				-- 2. Sleep for 5 seconds
-				task.wait(WAIT_TIME)
-			end
-		end
-	end)
+-- Clear Waypoint Event
+ClearWPBtn.MouseButton1Click:Connect(function()
+    waypoints = {}
+    StatusLabel.Text = "Waypoints: 0"
 end)
 
--- Stop Loop Button
-StopBtn.MouseButton1Click:Connect(function()
-	isRunning = false
-	if currentTween then
-		currentTween:Cancel()
-		
-		-- Ensure character is unanchored if stopped mid-tween
-		local char = player.Character
-		if char and char:FindFirstChild("HumanoidRootPart") then
-			char.HumanoidRootPart.Anchored = false
-		end
-	end
-	
-	StatusLabel.Text = "Status: STOPPED"
-	StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-	task.wait(1.5)
-	StatusLabel.Text = "Waypoints: " .. #waypoints
-	StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-end)
-
--- Clear Waypoints Button
-ClearBtn.MouseButton1Click:Connect(function()
-	if isRunning then return end -- Don't clear while running
-	waypoints = {}
-	StatusLabel.Text = "Waypoints: 0"
+-- Toggle Start/Stop Event
+ToggleBtn.MouseButton1Click:Connect(function()
+    if #waypoints == 0 then return end -- Don't start if no waypoints exist
+    
+    isRunning = not isRunning
+    
+    if isRunning then
+        ToggleBtn.Text = "STOP"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        
+        -- Run the loop on a separate thread so it doesn't freeze the game
+        task.spawn(function()
+            while isRunning do
+                for i, wpCFrame in ipairs(waypoints) do
+                    if not isRunning then break end
+                    
+                    -- 1. Tween to Waypoint
+                    tweenTo(wpCFrame)
+                    
+                    if not isRunning then break end
+                    
+                    -- 2. Sleep phase
+                    local sleepDuration = tonumber(SleepInput.Text) or 1
+                    task.wait(sleepDuration)
+                end
+            end
+            
+            -- Reset button appearance when loop is manually stopped
+            ToggleBtn.Text = "START"
+            ToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 210)
+        end)
+    else
+        -- If clicked while running, this flips the boolean and stops the loop at the next check
+        ToggleBtn.Text = "START"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 210)
+    end
 end)
